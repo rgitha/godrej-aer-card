@@ -6,7 +6,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.2.2";
+const CARD_VERSION = "0.2.3";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -445,8 +445,7 @@ const STYLE = `
   .banner.warn { border-left: 4px solid var(--error-color); }
   .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px;
          background: var(--secondary-background-color); cursor: pointer; }
-  .row.running { outline: 2px solid var(--primary-color); }
-  .row.editing { background: color-mix(in srgb, var(--primary-color) 14%, var(--secondary-background-color)); box-shadow: inset 4px 0 0 var(--primary-color); }
+  .row.editing { outline: 2px solid var(--primary-color); }
   .hicon { color: var(--state-icon-color, var(--primary-color)); --mdc-icon-size: 24px; }
   .names { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
   .when b { display: block; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }

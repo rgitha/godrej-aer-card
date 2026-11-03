@@ -6,7 +6,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -169,12 +169,26 @@ class GodrejAerScheduleCard extends HTMLElement {
     return entry && entry.device_id ? { device_id: entry.device_id } : { entity_id: this._config.entity };
   }
 
-  async _call(kind, service, data) {
+  /**
+   * How Refresh reads the device. Home Assistant's own update_entity always
+   * exists, but it only reads the device once the integration supports it,
+   * which it does when it no longer registers its own update_status action.
+   * So: update_entity, unless the integration still has update_status.
+   */
+  get _refreshCall() {
+    const services = this._hass.services && this._hass.services[this._domain];
+    if (services && services.update_status) {
+      return { domain: this._domain, service: "update_status", target: this._target };
+    }
+    return { domain: "homeassistant", service: "update_entity", target: { entity_id: this._config.entity } };
+  }
+
+  async _call(kind, service, data, domain = this._domain, target = this._target) {
     this._busy = kind;
     this._error = null;
     this._render();
     try {
-      await this._hass.callService(this._domain, service, data, this._target);
+      await this._hass.callService(domain, service, data, target);
       return true;
     } catch (err) {
       if (kind === "save" && /changed since they were read|schedules_changed/i.test(`${err.message} ${err.translation_key || ""}`)) {
@@ -327,7 +341,10 @@ class GodrejAerScheduleCard extends HTMLElement {
     const e = this._editing;
     switch (act) {
       case "refresh":
-        this._call("refresh", "update_status", {});
+        {
+          const { domain, service, target } = this._refreshCall;
+          this._call("refresh", service, {}, domain, target);
+        }
         return;
       case "skip":
         this._call("skip", "stop_schedule", { schedule: "current" });

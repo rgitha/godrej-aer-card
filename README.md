@@ -53,6 +53,9 @@ entity: sensor.living_room_schedules
   another app, another dashboard or an automation), the card asks whether to
   keep the device's schedules or overwrite them. Unsaved edits are lost if the
   page is reloaded.
+- **While a schedule runs,** the editor warns that saving any change stops it
+  until its next start: the device replaces the whole list and starts a
+  schedule only at its start time.
 - **Refresh** reads the schedules from the device again.
 
 ## Disclaimer

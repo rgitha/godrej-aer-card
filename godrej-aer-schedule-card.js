@@ -6,7 +6,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -157,6 +157,12 @@ class GodrejAerScheduleCard extends HTMLElement {
     this._render();
   }
 
+  /** The number of the schedule the device is running now, if any. */
+  get _runningNow() {
+    const state = this._state;
+    return (state && state.state !== "unavailable" && state.attributes.running) || null;
+  }
+
   // --- device actions -------------------------------------------------------
 
   get _domain() {
@@ -236,7 +242,9 @@ class GodrejAerScheduleCard extends HTMLElement {
       body = "";
     } else if (!state) {
       body = `<div class="banner warn">Entity ${esc(this._config.entity)} not found.</div>`;
-    } else if (this._list === null || state.state === "unknown" || state.state === "unavailable") {
+    } else if (state.state === "unavailable") {
+      body = `<div class="banner">The device can't be reached right now.</div>`;
+    } else if (this._list === null || state.state === "unknown") {
       body = `<div class="banner">The schedules haven't been read yet.</div>`;
     } else {
       body = this._renderList(state);
@@ -245,13 +253,16 @@ class GodrejAerScheduleCard extends HTMLElement {
       <style>${STYLE}</style>
       <ha-card>
         <div class="head">
-          <div class="title">${esc(name)}</div>
-          <div class="sub">${this._list ? `${this._list.length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
+          <ha-icon class="hicon" icon="mdi:calendar-clock"></ha-icon>
+          <div class="names">
+            <div class="title">${esc(name)}</div>
+            <div class="sub">${this._list && state && state.state !== "unavailable" ? `${this._list.length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
+          </div>
           <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : "⟳"}</button>
         </div>
         ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
         ${body}
-        ${this._editing ? this._renderEditor() : ""}
+        ${this._editing && state && state.state !== "unavailable" ? this._renderEditor() : ""}
         ${this._conflict ? this._renderConflict() : ""}
       </ha-card>`;
     this.shadowRoot.querySelectorAll("[data-act]").forEach((el) => {
@@ -264,9 +275,10 @@ class GodrejAerScheduleCard extends HTMLElement {
     const rows = this._list
       .map((s, i) => {
         const isRunning = running === i + 1;
+        const isEditing = this._editing && this._editing.index === i;
         const end = endLabel(s);
         return `
-        <div class="row ${isRunning ? "running" : ""}" data-act="edit" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
+        <div class="row ${isRunning ? "running" : ""} ${isEditing ? "editing" : ""}" data-act="edit" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
           <div class="when"><b>${esc(s.start)} – ${esc(end)}</b><span>every ${s.interval} min</span></div>
           <div class="days">${DAYS.map((d) => `<span class="d ${s.days.includes(d) ? "on" : ""}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</span>`).join("")}</div>
           ${isRunning ? `<div class="runline"><span class="pill">Running now</span><button class="btn" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip this run"}</button></div>` : ""}
@@ -274,14 +286,13 @@ class GodrejAerScheduleCard extends HTMLElement {
       })
       .join("");
     return `
-      <div class="note">Stored on the device: they run without Home Assistant.</div>
       ${rows || `<div class="empty">No schedules.</div>`}
       <div class="foot">
         <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._busy ? "disabled" : ""}>+ Add schedule</button>
       </div>
       ${this._dirty ? `
       <div class="savebar">
-        <span>Not saved to device</span>
+        <span>Not saved to device${this._runningNow ? `<small>Stops the running schedule</small>` : ""}</span>
         <button class="btn" data-act="discard" ${this._busy ? "disabled" : ""}>Discard</button>
         <button class="btn primary" data-act="save" ${this._busy ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
       </div>` : ""}`;
@@ -289,6 +300,9 @@ class GodrejAerScheduleCard extends HTMLElement {
 
   _renderEditor() {
     const { index, schedule: s, error } = this._editing;
+    const warn = this._runningNow
+      ? `<div class="banner warn">A schedule is running. Saving any change stops it until its next start.</div>`
+      : "";
     const r = rounded(s.start, s.end, s.interval);
     const nextDay = r.endMinutes > DAY;
     const hint = r.sprays >= 1
@@ -296,7 +310,8 @@ class GodrejAerScheduleCard extends HTMLElement {
       : "";
     return `
       <div class="editor" role="dialog" aria-label="${index < 0 ? "Add schedule" : "Edit schedule"}">
-        <div class="etitle">${index < 0 ? "Add schedule" : "Edit schedule"}</div>
+        ${warn}
+        <div class="etitle">${index < 0 ? "Add schedule" : `Edit schedule<small>${index + 1} of ${this._list.length}</small>`}</div>
         <div class="lbl"><span>Days</span>${DAY_PRESETS.map(([label], i) => `<button class="chip" data-act="days" data-preset="${i}">${label}</button>`).join("")}</div>
         <div class="dayrow">${DAYS.map((d) => `<button class="dt ${s.days.includes(d) ? "on" : ""}" data-act="day" data-day="${d}" aria-pressed="${s.days.includes(d)}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</button>`).join("")}</div>
         <div class="lbl"><span>Time</span>${TIME_PRESETS.map(([label], i) => `<button class="chip" data-act="time" data-preset="${i}">${label}</button>`).join("")}</div>
@@ -422,15 +437,18 @@ class GodrejAerScheduleCard extends HTMLElement {
 
 const STYLE = `
   ha-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; position: relative; }
-  .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
   .title { font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
-  .sub { flex-grow: 1; font-size: 13px; color: var(--secondary-text-color); }
+  .sub { font-size: 13px; color: var(--secondary-text-color); }
   .note, .empty, .hint { font-size: 13px; color: var(--secondary-text-color); }
   .banner { font-size: 13px; padding: 8px 12px; border-radius: 10px; background: var(--secondary-background-color); color: var(--primary-text-color); }
   .banner.warn { border-left: 4px solid var(--error-color); }
   .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px;
          background: var(--secondary-background-color); cursor: pointer; }
   .row.running { outline: 2px solid var(--primary-color); }
+  .row.editing { background: color-mix(in srgb, var(--primary-color) 14%, var(--secondary-background-color)); box-shadow: inset 4px 0 0 var(--primary-color); }
+  .hicon { color: var(--state-icon-color, var(--primary-color)); --mdc-icon-size: 24px; }
+  .names { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
   .when b { display: block; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
   .when span { font-size: 13px; color: var(--secondary-text-color); }
   .days { display: flex; gap: 2px; }
@@ -442,6 +460,7 @@ const STYLE = `
   .foot { display: flex; justify-content: flex-end; }
   .savebar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: var(--secondary-background-color); }
   .savebar span { flex-grow: 1; font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+  .savebar small { display: block; font-size: 12px; font-weight: 400; color: var(--error-color); }
   button { font: inherit; cursor: pointer; }
   button[disabled] { opacity: 0.45; cursor: default; }
   .btn { min-height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid var(--divider-color); background: none; color: var(--primary-color); font-size: 14px; font-weight: 500; }
@@ -451,6 +470,7 @@ const STYLE = `
   .editor { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 14px; border: 1px solid var(--divider-color);
             background: var(--card-background-color); color: var(--primary-text-color); font-size: 14px; }
   .etitle { font-size: 17px; font-weight: 500; }
+  .etitle small { font-size: 13px; font-weight: 400; color: var(--secondary-text-color); margin-left: 6px; }
   .lbl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
   .lbl span { flex-grow: 1; }
   .chip { font-size: 12px; padding: 4px 10px; border-radius: 12px; border: 1px solid var(--divider-color); background: none; color: var(--primary-text-color); }

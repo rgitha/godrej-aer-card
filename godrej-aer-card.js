@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.3.2-beta.1";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -83,6 +83,9 @@ function fromAttribute(item) {
 const forAction = (s) => ({ days: [...s.days], start: s.start, end: s.end, interval: s.interval });
 
 /** Problems with one schedule against the rest of the list (index = its place, or -1 if new). */
+/** Pop-up actions that change the list or what's unfolded. */
+const EDIT_ACTS = ["add", "edit", "fold", "day", "days", "time", "start", "end", "interval", "delete", "save", "discard"];
+
 /** What's wrong with each schedule in the list (null if nothing). */
 function listProblems(list) {
   return list.map((s, i) => {
@@ -175,17 +178,58 @@ function nextRun(list, now) {
 }
 
 const ICON = {
-  battery: "M16,20H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
-  refill: "M12,20A6,6 0 0,1 6,14C6,10 12,3.25 12,3.25C12,3.25 18,10 18,14A6,6 0 0,1 12,20Z",
   spray: "M3,15H5V21H3V15M7,13H13V21H7V13M8,9H12V12H8V9M15,11H17V13H15V11M19,9H21V11H19V9M19,13H21V15H19V13M17,7H19V9H17V7M17,15H19V17H17V15Z",
   refresh: "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z",
   chevronUp: "M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z",
   dots: "M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z",
 };
+/** Home Assistant's battery icons (Material Design), by level. */
+const BATTERY_ICONS = {
+  b0: "M14 20H6V6H14M14.67 4H13V2H7V4H5.33C4.6 4 4 4.6 4 5.33V20.67C4 21.4 4.6 22 5.33 22H14.67C15.4 22 16 21.4 16 20.67V5.33C16 4.6 15.4 4 14.67 4M21 7H19V13H21V8M21 15H19V17H21V15Z",
+  b10: "M16,18H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b20: "M16,17H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b30: "M16,15H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b40: "M16,14H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b50: "M16,13H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b60: "M16,12H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b70: "M16,10H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b80: "M16,9H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b90: "M16,8H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  b100: "M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
+  bunk: "M15.07,12.25L14.17,13.17C13.63,13.71 13.25,14.18 13.09,15H11.05C11.16,14.1 11.56,13.28 12.17,12.67L13.41,11.41C13.78,11.05 14,10.55 14,10C14,8.89 13.1,8 12,8A2,2 0 0,0 10,10H8A4,4 0 0,1 12,6A4,4 0 0,1 16,10C16,10.88 15.64,11.68 15.07,12.25M13,19H11V17H13M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.66C6,21.4 6.6,22 7.33,22H16.67C17.4,22 18,21.4 18,20.66V5.33C18,4.59 17.4,4 16.67,4Z",
+};
+/** The battery icon for a level, as Home Assistant picks it: rounded to
+ * 10 %, an alert icon at 0. */
+function batteryIcon(value) {
+  const n = Number(value);
+  if (value == null || value === "" || !Number.isFinite(n)) return BATTERY_ICONS.bunk;
+  const step = Math.round(n / 10) * 10;
+  return step <= 0 ? BATTERY_ICONS.b0 : BATTERY_ICONS[`b${Math.min(step, 100)}`];
+}
+
+/** The refill level: the standard outline drop (Material Design), filled
+ * from the bottom. The level is measured over the clear space inside the
+ * outline (y 6.91 to 18.23 of 24), not the drop's full height. */
+const DROP_OUTLINE = "M12,3.77L11.25,4.61C11.25,4.61 9.97,6.06 8.68,7.94C7.39,9.82 6,12.07 6,14.23A6,6 0 0,0 12,20.23A6,6 0 0,0 18,14.23C18,12.07 16.61,9.82 15.32,7.94C14.03,6.06 12.75,4.61 12.75,4.61L12,3.77M12,6.9C12.44,7.42 12.84,7.85 13.68,9.07C14.89,10.83 16,13.07 16,14.23C16,16.45 14.22,18.23 12,18.23C9.78,18.23 8,16.45 8,14.23C8,13.07 9.11,10.83 10.32,9.07C11.16,7.85 11.56,7.42 12,6.9Z";
+const DROP_FILLED = "M12,20A6,6 0 0,1 6,14C6,10 12,3.25 12,3.25C12,3.25 18,10 18,14A6,6 0 0,1 12,20Z";
+const DROP_INSIDE = [6.91, 18.23];
+let dropClip = 0;
+function levelDrop(level, size) {
+  const v = Math.max(0, Math.min(100, Number(level) || 0)) / 100;
+  const [top, bottom] = DROP_INSIDE;
+  const y = bottom - (bottom - top) * v;
+  const id = `aer-drop-${++dropClip}`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">
+    <defs><clipPath id="${id}"><rect x="0" y="${y.toFixed(2)}" width="24" height="${(24 - y).toFixed(2)}"/></clipPath></defs>
+    <path fill="currentColor" d="${DROP_OUTLINE}"/>
+    <path fill="currentColor" clip-path="url(#${id})" d="${DROP_FILLED}"/></svg>`;
+}
+
 const svg = (path, size = 20) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${path}"/></svg>`;
 
 const LOW_BATTERY = 20;
+const LOW_REFILL = 15;
 
 /** "just now", "5m ago", "2h ago", "3d ago". */
 function shortAgo(iso) {
@@ -441,6 +485,8 @@ class GodrejAerCard extends HTMLElement {
     const read = updated && !["unknown", "unavailable"].includes(updated.state) ? updated.state : null;
     const pct = (s) => (s && !["unknown", "unavailable"].includes(s.state) ? `${Math.round(Number(s.state))}%` : "–");
     const low = battery && Number(battery.state) < LOW_BATTERY;
+    const refillPct = refill ? Math.max(0, Math.min(100, Number(refill.state) || 0)) : 0;
+    const refillLow = refill && Number.isFinite(Number(refill.state)) && Number(refill.state) < LOW_REFILL;
     const menu = this._menu
       ? `<div class="menu" role="menu">
           ${this._ents.resetRefill ? `<button role="menuitem" data-act="press" data-entity="${this._ents.resetRefill}" ${off ? "disabled" : ""}>Reset refill level</button>` : ""}
@@ -450,7 +496,7 @@ class GodrejAerCard extends HTMLElement {
     return `
       <div class="top">
         <div class="names"><div class="area">${esc(sub)}</div><div class="title">${esc(this._deviceName())}</div></div>
-        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
+        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
         <button class="more" data-act="menu" aria-label="More" aria-haspopup="menu">${svg(ICON.dots)}</button>
         ${menu}
       </div>
@@ -458,8 +504,8 @@ class GodrejAerCard extends HTMLElement {
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
       <div class="strip ${off ? "dim" : ""}">
         <span class="mode m-${esc(mode)}"><i></i>${esc(this._fmt(status) || "Unknown")}</span>
-        <button class="kv ${low ? "low" : ""}" data-act="info" data-entity="${esc(this._ents.battery || "")}" title="Battery">${svg(ICON.battery, 18)}${pct(battery)}</button>
-        <button class="kv" data-act="info" data-entity="${esc(this._ents.refill || "")}" title="Refill level">${svg(ICON.refill, 18)}${pct(refill)}</button>
+        <button class="kv ${low ? "low" : ""}" data-act="info" data-entity="${esc(this._ents.battery || "")}" title="Battery">${svg(batteryIcon(battery && battery.state), 18)}${pct(battery)}</button>
+        <button class="kv" data-act="info" data-entity="${esc(this._ents.refill || "")}" title="Refill level"><span class="lvl ${refillLow ? "low" : ""}">${levelDrop(refillPct, 21)}</span>${pct(refill)}</button>
         ${read ? `<span class="ago" title="Status read ${esc(ago(read))}">${esc(shortAgo(read))}</span>` : ""}
       </div>
       <div class="ctrl ${off ? "dim" : ""}">
@@ -582,24 +628,28 @@ class GodrejAerCard extends HTMLElement {
     const bad = listProblems(this._list);
     const broken = bad.some(Boolean);
     const rows = this._list
-      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i]) : this._renderRow(s, i, runningAt === i, "edit", "", nextAt === i, bad[i])))
+      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i]) : this._renderRow(s, i, runningAt === i, "edit", this._busy === "refresh" ? "dim" : "", nextAt === i, bad[i])))
       .join("");
     // Trying to close with changes asks first; Save with a problem left
     // says to check the schedules. Editing again clears both.
-    const ask = this._confirmClose && this._dirty;
-    const check = this._check && broken;
-    const text = ask ? "Discard changes?" : check ? "Check the schedules" : this._dirty ? "Changes not saved" : "No changes";
+    // Save finding the device's list changed asks keep or overwrite.
+    const conflict = this._conflict;
+    const ask = !conflict && this._confirmClose && this._dirty;
+    const check = !conflict && this._check && broken;
+    const text = conflict ? "Device schedules changed" : ask ? "Discard changes?" : check ? "Check the schedules" : this._dirty ? "Changes not saved" : "No changes";
     return `
       ${rows || `<div class="empty">No schedules.</div>`}
       <div class="foot">
         <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._busy ? "disabled" : ""}>+ Add schedule</button>
       </div>
-      <div class="savebar ${ask || check ? "ask" : ""}">
-        <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
+      <div class="savebar ${ask || check || conflict ? "ask" : ""}">
+        <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && !conflict && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
+        ${conflict ? `
+        <button class="btn" data-act="keep" ${this._busy ? "disabled" : ""}>Keep device's</button>
+        <button class="btn primary" data-act="overwrite" ${this._busy ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Overwrite"}</button>` : `
         ${ask ? `<button class="btn danger" data-act="discard" ${this._busy ? "disabled" : ""}>Discard</button>` : ""}
-        <button class="btn primary" data-act="save" ${this._busy || !this._dirty ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
-      </div>
-      ${this._conflict ? this._renderConflict() : ""}`;
+        <button class="btn primary" data-act="save" ${this._busy || !this._dirty ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>`}
+      </div>`;
   }
 
   // --- the schedules pop-up -------------------------------------------------
@@ -611,10 +661,19 @@ class GodrejAerCard extends HTMLElement {
       this._onPop = () => this._onBack();
       window.addEventListener("popstate", this._onPop);
     }
+    const opening = !this._dialogOpen;
     this._dialogOpen = true;
     this._confirmClose = false;
     this._check = false;
     this._error = null;
+    // Edit from the device's current list: read it again unless the last
+    // read is under a minute old. Editing waits for the read.
+    const st = this._sched;
+    const readAt = st && st.attributes.last_read ? new Date(st.attributes.last_read).getTime() : 0;
+    if (opening && st && st.state !== "unavailable" && !this._busy && Date.now() - readAt > 60000) {
+      const { domain, service, target } = this._refreshCall;
+      this._control("refresh", domain, service, {}, target);
+    }
   }
 
   /** The edited list differs from the device's (Done with nothing
@@ -698,9 +757,9 @@ class GodrejAerCard extends HTMLElement {
           <div class="dh">
             <button class="x" data-act="close-dialog" aria-label="Close">✕</button>
             <div class="dtl"><b>Schedules</b><span>${esc(sub)}</span></div>
-            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
+            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
           </div>
-          ${this._list && !unreachable ? `<div class="used">${this._list.length} of ${MAX_SCHEDULES} used</div>` : ""}
+          ${this._list && !unreachable ? `<div class="used">${this._busy === "refresh" ? "Reading schedules…" : `${this._list.length} of ${MAX_SCHEDULES} used`}</div>` : ""}
           ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
           ${body}
         </div>
@@ -721,7 +780,7 @@ class GodrejAerCard extends HTMLElement {
       ? `Ends at ${toHHMM(nextDay ? r.endMinutes - DAY : r.endMinutes)}${nextDay ? " the next day" : ""} (${r.sprays} spray${r.sprays === 1 ? "" : "s"})`
       : "";
     return `
-      <div class="editor inline ${problem ? "bad" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
+      <div class="editor inline ${problem ? "bad" : ""} ${this._busy === "refresh" ? "dim" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
         <div class="etitle" data-act="fold" role="button" tabindex="0" aria-label="Fold">
           <span>${esc(s.start)} – ${esc(endLabel(s))}<small>${index + 1} of ${this._list.length}</small></span>
           <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
@@ -745,33 +804,19 @@ class GodrejAerCard extends HTMLElement {
       </div>`;
   }
 
-  _renderConflict() {
-    return `
-      <div class="editor" role="dialog" aria-label="Device schedules changed">
-        <div class="etitle">Device schedules changed</div>
-        <div>The schedules on the device changed after they were last read.</div>
-        <div class="acts">
-          <span></span>
-          <span>
-            <button class="btn" data-act="keep">Keep device schedules</button>
-            <button class="btn primary" data-act="overwrite">Overwrite</button>
-          </span>
-        </div>
-      </div>`;
-  }
-
-  // --- events ----------------------------------------------------------------
-
   _onAction(ev, el) {
     const act = el.dataset.act;
     if (act !== "edit" && act !== "edit-pop" && act !== "backdrop") ev.stopPropagation();
     const e = this._open >= 0 ? this._list[this._open] : null;
+    if (this._busy === "refresh" && EDIT_ACTS.includes(act)) return;
     if (act !== "menu") this._menu = false;
     // Save or Discard after trying to close finishes closing; anything
     // else carries on editing.
     const closing = this._confirmClose;
     if (closing && act !== "close-dialog" && act !== "backdrop") this._confirmClose = false;
     if (act !== "save") this._check = false;
+    // Editing again also drops a pending keep-or-overwrite question.
+    if (this._conflict && act !== "keep" && act !== "overwrite" && act !== "close-dialog" && act !== "backdrop") this._conflict = false;
     switch (act) {
       case "menu":
         this._menu = !this._menu;
@@ -889,6 +934,10 @@ class GodrejAerCard extends HTMLElement {
 
 
 const DIALOG_STYLE = `
+  .spin { display: inline-flex; animation: aer-spin 1s linear infinite; }
+  button[disabled]:has(.spin) { opacity: 1; }
+  @keyframes aer-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
   .ov { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); }
   .dlg { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; width: 480px; max-width: calc(100vw - 32px); max-height: 88vh; overflow: auto;
          padding: 0 20px 20px; border-radius: 24px; outline: none; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
@@ -911,6 +960,10 @@ const DIALOG_STYLE = `
 `;
 
 const STYLE = `
+  .spin { display: inline-flex; animation: aer-spin 1s linear infinite; }
+  button[disabled]:has(.spin) { opacity: 1; }
+  @keyframes aer-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
   ha-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; position: relative; container-type: inline-size; }
   .top { display: flex; align-items: flex-start; gap: 6px; position: relative; }
   .top .names { flex-grow: 1; min-width: 0; }
@@ -931,6 +984,11 @@ const STYLE = `
   .kv { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: none; background: none; font-size: 15px; color: var(--primary-text-color); }
   .kv svg { color: var(--state-icon-color, var(--primary-color)); }
   .kv.low, .kv.low svg { color: var(--error-color); }
+  /* Refill: a drop filled to the level, a little larger than the other
+   * icons so the fill shows; the negative margin keeps the line height. */
+  .lvl { display: inline-flex; margin: -2px -2px -2px -3px; }
+  .lvl svg { color: var(--state-icon-color, var(--primary-color)); }
+  .lvl.low svg { color: var(--error-color); }
   .strip .ago { margin-left: auto; font-size: 12px; color: var(--secondary-text-color); white-space: nowrap; }
   .ctrl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: end; }
   .sprayb { min-height: 44px; padding: 0 16px; border-radius: 22px; border: none; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 500;

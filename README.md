@@ -42,8 +42,9 @@ device: <your Smart Matic device>
 - **Header:** the device name and its area, with Refresh and a ⋮ menu
   (Reset refill level, Identify).
 - **Status strip:** the mode (Idle, Auto, Schedule or Disconnected), battery,
-  refill, and when the status was read. Tap battery or refill for their details. The battery turns red
-  below 20 %.
+  refill, and when the status was read. Tap battery or refill for their details. The battery icon
+  follows the level, as in Home Assistant, and turns red below 20 %. The
+  refill drop fills to the level and turns red below 15 %.
 - **Spray now** and **Auto** (Off, 10, 20 or 40 minutes). While a schedule
   runs, Auto is greyed out: the device ignores it, and tapping it shows why.
 - **Schedules:** one line, always the same height: the running schedule with
@@ -56,7 +57,8 @@ device: <your Smart Matic device>
 ### Editing schedules
 
 Schedules are edited in a pop-up: **Show all** or **Edit**, or tap a
-schedule. On a phone it fills the screen.
+schedule. On a phone it fills the screen. Opening it reads the schedules from the device
+again, unless they were read in the last minute.
 
 - Tap a schedule to unfold it and edit it in place; tap its header to fold
   it. **+ Add schedule** adds one, unfolded, in the first free window of
@@ -70,8 +72,8 @@ schedule. On a phone it fills the screen.
   than one interval.
 - Every change is part of the list until you press **Save**, which writes
   the whole list to the device. With a problem left, Save says "Check the
-  schedules" instead. If the device's schedules changed meanwhile, it asks
-  whether to keep them or overwrite them.
+  schedules" instead. If the device's schedules changed meanwhile, the save
+  bar says "Device schedules changed", with Keep device's and Overwrite.
 - Closing with unsaved changes asks "Discard changes?" in the save bar, with
   Discard and Save; either then closes the pop-up. Editing again or saving
   dismisses the question.

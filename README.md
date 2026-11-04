@@ -79,9 +79,10 @@ again, unless they were read in the last minute.
   dismisses the question.
 - The card itself shows only the schedules on the device; unsaved edits
   stay in the pop-up.
-- While a schedule runs, the editor warns that saving will interrupt it: the
-  device replaces the whole list. A schedule covering the current time starts
-  again within about a minute, with a spray.
+- While a schedule runs and there are changes, the save bar adds "Saving
+  restarts running schedule.": the device replaces the whole list, and a
+  schedule covering the current time starts again within about a minute,
+  with a spray.
 
 ## Disclaimer
 

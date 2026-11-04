@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.2-beta.1";
+const CARD_VERSION = "0.3.2-beta.2";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -643,7 +643,7 @@ class GodrejAerCard extends HTMLElement {
         <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._busy ? "disabled" : ""}>+ Add schedule</button>
       </div>
       <div class="savebar ${ask || check || conflict ? "ask" : ""}">
-        <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && !conflict && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
+        <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && !conflict && this._runningNow ? `<small>Saving restarts running schedule.</small>` : ""}</span>
         ${conflict ? `
         <button class="btn" data-act="keep" ${this._busy ? "disabled" : ""}>Keep device's</button>
         <button class="btn primary" data-act="overwrite" ${this._busy ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Overwrite"}</button>` : `
@@ -771,9 +771,6 @@ class GodrejAerCard extends HTMLElement {
 
   _renderEditor(index, problem) {
     const s = this._list[index];
-    const warn = this._runningNow
-      ? `<div class="banner warn">A schedule is running. Saving will interrupt it.</div>`
-      : "";
     const r = rounded(s.start, s.end, s.interval);
     const nextDay = r.endMinutes > DAY;
     const hint = r.sprays >= 1
@@ -785,7 +782,6 @@ class GodrejAerCard extends HTMLElement {
           <span>${esc(s.start)} – ${esc(endLabel(s))}<small>${index + 1} of ${this._list.length}</small></span>
           <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
         </div>
-        ${warn}
         <div class="lbl"><span>Days</span>${DAY_PRESETS.map(([label], i) => `<button class="chip" data-act="days" data-preset="${i}">${label}</button>`).join("")}</div>
         <div class="dayrow">${DAYS.map((d) => `<button class="dt ${s.days.includes(d) ? "on" : ""}" data-act="day" data-day="${d}" aria-pressed="${s.days.includes(d)}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</button>`).join("")}</div>
         <div class="lbl"><span>Time</span>${TIME_PRESETS.map(([label], i) => `<button class="chip" data-act="time" data-preset="${i}">${label}</button>`).join("")}</div>

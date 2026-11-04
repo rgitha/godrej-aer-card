@@ -151,21 +151,22 @@ const smartMatics = (hass) => [
   ),
 ];
 
-const OPEN_KEY = (id) => `godrej-aer-card:open:${id}`;
-const loadOpen = (id) => {
-  try {
-    return localStorage.getItem(OPEN_KEY(id)) === "1";
-  } catch (e) {
-    return false;
+/** The next start of any schedule after now: { schedule, day }. */
+function nextRun(list, now) {
+  const nowMin = ((now.getDay() + 6) % 7) * DAY + now.getHours() * 60 + now.getMinutes();
+  let best = null;
+  for (const s of list) {
+    for (const d of s.days) {
+      let at = DAYS.indexOf(d) * DAY + toMinutes(s.start);
+      if (at <= nowMin) at += WEEK;
+      if (!best || at < best.at) best = { at, schedule: s };
+    }
   }
-};
-const saveOpen = (id, open) => {
-  try {
-    localStorage.setItem(OPEN_KEY(id), open ? "1" : "0");
-  } catch (e) {
-    /* per-browser convenience only */
-  }
-};
+  if (!best) return null;
+  const ahead = Math.floor(best.at / DAY) - Math.floor(nowMin / DAY);
+  const day = ahead === 0 ? "today" : ahead === 1 ? "tomorrow" : DAY_LABEL[DAYS[Math.floor(best.at / DAY) % 7]];
+  return { schedule: best.schedule, day, inMinutes: best.at - nowMin };
+}
 
 const ICON = {
   battery: "M16,20H8V6H16M16.67,4H15V2H9V4H7.33A1.33,1.33 0 0,0 6,5.33V20.67C6,21.4 6.6,22 7.33,22H16.67A1.33,1.33 0 0,0 18,20.67V5.33C18,4.6 17.4,4 16.67,4Z",
@@ -203,7 +204,9 @@ class GodrejAerCard extends HTMLElement {
     this._busy = null; // "save" | "refresh" | "skip" | "spray" | "auto" | "menu-*"
     this._error = null;
     this._menu = false;
-    this._open = null; // schedules pane, remembered per browser
+    this._dialog = null; // the schedules pop-up's host, on the page
+    this._dialogOpen = false;
+    this._confirmClose = false;
   }
 
   setConfig(config) {
@@ -221,6 +224,16 @@ class GodrejAerCard extends HTMLElement {
   static getStubConfig(hass) {
     const device = smartMatics(hass)[0];
     return device ? { device } : { device: "" };
+  }
+
+  disconnectedCallback() {
+    this._closeDialog(true);
+  }
+
+  /** Sections view: half a row by default, height as needed (it doesn't
+   * change by itself: a schedule starting or ending keeps the same lines). */
+  getGridOptions() {
+    return { columns: 6, min_columns: 4, rows: "auto" };
   }
 
   getCardSize() {
@@ -246,7 +259,6 @@ class GodrejAerCard extends HTMLElement {
       snapshot.every((s, i) => s === this._snapshot[i]);
     this._ents = ents;
     this._snapshot = snapshot;
-    if (this._open === null && this._deviceId) this._open = loadOpen(this._deviceId);
     if (unchanged && !this._forceRender) return;
     this._forceRender = false;
     const st = this._sched;
@@ -364,11 +376,6 @@ class GodrejAerCard extends HTMLElement {
     this.hass = this._hass;
   }
 
-  _setOpen(open) {
-    this._open = open;
-    if (this._deviceId) saveOpen(this._deviceId, open);
-  }
-
   // --- rendering -------------------------------------------------------------
 
   _render() {
@@ -384,7 +391,12 @@ class GodrejAerCard extends HTMLElement {
       html = this._renderDevice();
     }
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${html}</ha-card>`;
-    this.shadowRoot.querySelectorAll("[data-act]").forEach((el) => {
+    this._bind(this.shadowRoot);
+    this._renderDialog();
+  }
+
+  _bind(root) {
+    root.querySelectorAll("[data-act]").forEach((el) => {
       el.addEventListener(el.tagName === "INPUT" ? "change" : "click", (ev) => this._onAction(ev, el));
     });
   }
@@ -408,7 +420,6 @@ class GodrejAerCard extends HTMLElement {
 
   _renderDevice() {
     const off = this._unreachable;
-    const editing = !!this._editing;
     const status = this._state("status");
     const battery = this._state("battery");
     const refill = this._state("refill");
@@ -428,19 +439,19 @@ class GodrejAerCard extends HTMLElement {
     return `
       <div class="top">
         <div class="names"><div class="area">${esc(sub)}</div><div class="title">${esc(this._deviceName())}</div></div>
-        <button class="icon ${editing ? "dim" : ""}" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
+        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
         <button class="more" data-act="menu" aria-label="More" aria-haspopup="menu">${svg(ICON.dots)}</button>
         ${menu}
       </div>
       ${off ? `<div class="banner">The device can't be reached right now.</div>` : ""}
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
-      <div class="strip ${off || editing ? "dim" : ""}">
+      <div class="strip ${off ? "dim" : ""}">
         <span class="mode m-${esc(mode)}"><i></i>${esc(this._fmt(status) || "Unknown")}</span>
         <button class="kv ${low ? "low" : ""}" data-act="info" data-entity="${esc(this._ents.battery || "")}" title="Battery">${svg(ICON.battery, 18)}${pct(battery)}</button>
         <button class="kv" data-act="info" data-entity="${esc(this._ents.refill || "")}" title="Refill level">${svg(ICON.refill, 18)}${pct(refill)}</button>
         ${read ? `<span class="ago" title="Status read ${esc(ago(read))}">${esc(shortAgo(read))}</span>` : ""}
       </div>
-      <div class="ctrl ${off || editing ? "dim" : ""}">
+      <div class="ctrl ${off ? "dim" : ""}">
         <button class="sprayb" data-act="press" data-entity="${esc(this._ents.spray || "")}" ${this._busy === "spray" ? "disabled" : ""}>${svg(ICON.spray)}Spray now</button>
         <div class="autow"><div class="tiny">Auto · minutes</div>${this._renderAuto(auto, mode === "schedule")}</div>
       </div>
@@ -466,13 +477,13 @@ class GodrejAerCard extends HTMLElement {
           <div class="title">${esc(name)}</div>
           <div class="sub">${this._list && usable ? `${this._list.length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
         </div>
-        <button class="icon ${this._editing ? "dim" : ""}" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : "⟳"}</button>
+        <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : "⟳"}</button>
       </div>
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
       ${!state ? `<div class="banner warn">Entity ${esc(this._config.entity)} not found.</div>`
         : state.state === "unavailable" ? `<div class="banner">The device can't be reached right now.</div>`
         : this._list === null || state.state === "unknown" ? `<div class="banner">The schedules haven't been read yet.</div>`
-        : this._renderList(state, true)}`;
+        : this._renderInline(state, false)}`;
   }
 
   _renderSchedules() {
@@ -481,9 +492,36 @@ class GodrejAerCard extends HTMLElement {
     if (this._list === null || state.state === "unknown") {
       return `<div class="sect"><b>Schedules</b></div><div class="banner">The schedules haven't been read yet.</div>`;
     }
-    // Stay open while editing or with unsaved changes.
-    const open = this._open || !!this._editing || this._dirty;
-    return this._renderList(state, open);
+    if (this._config.show_schedules) return this._renderInline(state, true);
+    // One line, always the same height: the running schedule, or the next.
+    return `
+      <div class="sect"><b>Schedules</b><button class="link" data-act="dialog">Show all</button></div>
+      ${this._renderSlot(this._runningIndex(state))}`;
+  }
+
+  _renderSlot(runningAt) {
+    if (runningAt >= 0) {
+      const s = this._list[runningAt];
+      return `<div class="slot"><span class="chipx">Running</span><b>${esc(s.start)} – ${esc(endLabel(s))}</b><span class="grow"></span>
+        <button class="btn small" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button></div>`;
+    }
+    const next = nextRun(this._list, new Date());
+    if (!next) {
+      return `<div class="slot"><span class="slabel">No schedules</span><span class="grow"></span>
+        <button class="btn small" data-act="add-pop">+ Add</button></div>`;
+    }
+    return `<div class="slot"><span class="chipn">Next</span><b>${esc(next.schedule.start)} – ${esc(endLabel(next.schedule))}</b><span class="grow"></span><span class="slabel">${esc(next.day)}</span></div>`;
+  }
+
+  /** Every schedule, read-only; tap one (or Edit) to edit it in the pop-up. */
+  _renderInline(state, heading) {
+    const runningAt = this._runningIndex(state);
+    const nextAt = this._nextIndex();
+    const rows = this._list.map((s, i) => this._renderRow(s, i, runningAt === i, "edit-pop", "", nextAt === i)).join("");
+    return `
+      ${heading ? `<div class="sect"><b>Schedules</b><button class="link" data-act="dialog">Edit</button></div>` : ""}
+      ${rows || `<div class="slot"><span class="slabel">No schedules</span><span class="grow"></span><button class="btn small" data-act="add-pop">+ Add</button></div>`}
+      ${heading ? "" : `<div class="foot"><button class="btn" data-act="dialog">Edit schedules</button></div>`}`;
   }
 
   /** The list index of the running schedule: the device's running one, if
@@ -497,52 +535,123 @@ class GodrejAerCard extends HTMLElement {
     return this._list.findIndex((s) => same(s, original));
   }
 
-  _renderRow(s, i, isRunning, dim) {
+  /** One schedule, always the same height: running shows inside it. */
+  /** The list index of the schedule starting next, if within 24 hours. */
+  _nextIndex() {
+    const next = this._list ? nextRun(this._list, new Date()) : null;
+    return next && next.inMinutes <= DAY ? this._list.indexOf(next.schedule) : -1;
+  }
+
+  _renderRow(s, i, isRunning, act, dim = "", isNext = false) {
     const end = endLabel(s);
     return `
-        <div class="row ${dim}" data-act="edit" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
-          <div class="when"><b>${esc(s.start)} – ${esc(end)}</b><span>every ${s.interval} min</span></div>
+        <div class="row ${dim}" data-act="${act}" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
+          <b class="t">${esc(s.start)} – ${esc(end)}</b>
           <div class="days">${DAYS.map((d) => `<span class="d ${s.days.includes(d) ? "on" : ""}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</span>`).join("")}</div>
-          ${isRunning ? `<div class="runline"><span class="pill">Running now</span><button class="btn" data-act="skip" ${this._busy || this._editing ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip this run"}</button></div>` : ""}
+          <div class="every">${isRunning ? `<span class="chipx">Running</span>` : isNext ? `<span class="chipn">Next</span>` : ""}every ${s.interval} min</div>
+          ${isRunning ? `<button class="skipl" data-act="skip" ${this._busy || this._editing ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
         </div>`;
   }
 
-  _renderList(state, open) {
+  /** The pop-up's list: edit in place, add, save. */
+  _renderDialogList(state) {
     const editing = this._editing;
     const runningAt = this._runningIndex(state);
     const dim = editing ? "dim" : "";
-    const always = this._layout === "schedules";
-
-    if (!open) {
-      // The same heading whether or not a schedule runs; the running one
-      // shows below it, with Skip.
-      return `
-        <div class="sect"><b>Schedules</b><button class="link" data-act="open">Show all ▾</button></div>
-        ${runningAt < 0 ? "" : this._renderRow(this._list[runningAt], runningAt, true, "")}`;
-    }
-
+    // Next is worked out from the list as it stands, edits included.
+    const nextAt = this._nextIndex();
     const rows = this._list
-      .map((s, i) => (editing && editing.index === i ? this._renderEditor() : this._renderRow(s, i, runningAt === i, dim)))
+      .map((s, i) => (editing && editing.index === i ? this._renderEditor() : this._renderRow(s, i, runningAt === i, "edit", dim, nextAt === i)))
       .join("");
     const adding = editing && editing.index < 0 ? this._renderEditor() : "";
     const off = this._busy || editing;
     const saveOff = off || !this._dirty;
-    const hideOff = !!editing || this._dirty;
     return `
-      ${always ? "" : `
-      <div class="sect"><b>Schedules</b><button class="link" data-act="close" ${hideOff ? "disabled" : ""}>Hide ▴</button></div>
-      <div class="used">${this._list.length} of ${MAX_SCHEDULES} used</div>`}
       ${rows || (adding ? "" : `<div class="empty">No schedules.</div>`)}
       ${adding}
       <div class="foot">
         <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || off ? "disabled" : ""}>+ Add schedule</button>
       </div>
       <div class="savebar ${editing ? "dim" : ""}">
-        <span class="${this._dirty ? "" : "quiet"}">${this._dirty ? "Schedule changes not saved" : "No unsaved schedules"}${this._dirty && this._runningNow ? `<small>Stops the running schedule</small>` : ""}</span>
+        <span class="${this._dirty ? "" : "quiet"}">${this._dirty ? "Changes not saved" : "No changes"}${this._dirty && this._runningNow ? `<small>Stops the running schedule</small>` : ""}</span>
         <button class="btn" data-act="discard" ${saveOff ? "disabled" : ""}>Discard</button>
         <button class="btn primary" data-act="save" ${saveOff ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
       </div>
       ${this._conflict ? this._renderConflict() : ""}`;
+  }
+
+  // --- the schedules pop-up -------------------------------------------------
+
+  _openDialog() {
+    this._dialogOpen = true;
+    this._confirmClose = false;
+    this._error = null;
+  }
+
+  /** Close, unless there are unsaved changes: then ask first. */
+  _closeDialog(force = false) {
+    if (!force && (this._dirty || this._editing)) {
+      this._confirmClose = true;
+      this._render();
+      return;
+    }
+    this._dialogOpen = false;
+    this._confirmClose = false;
+    this._editing = null;
+    this._conflict = false;
+    if (this._dirty) {
+      this._dirty = false;
+      this._reload();
+    }
+    if (this._dialog) {
+      this._dialog.remove();
+      this._dialog = null;
+    }
+  }
+
+  _renderDialog() {
+    const state = this._sched;
+    if (!this._dialogOpen || !state) {
+      if (this._dialog) this._closeDialog(true);
+      return;
+    }
+    if (!this._dialog) {
+      // On the page, not in the card: nothing around the card can clip it.
+      this._dialog = document.createElement("div");
+      this._dialog.attachShadow({ mode: "open" });
+      this._dialog.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") this._closeDialog();
+      });
+      document.body.appendChild(this._dialog);
+    }
+    const unreachable = state.state === "unavailable";
+    const sub = [this._areaName(), this._layout === "schedules" ? "" : this._deviceName()].filter(Boolean).join(" · ");
+    const body = unreachable
+      ? `<div class="banner">The device can't be reached right now.</div>`
+      : this._list === null
+        ? `<div class="banner">The schedules haven't been read yet.</div>`
+        : this._renderDialogList(state);
+    this._dialog.shadowRoot.innerHTML = `
+      <style>${STYLE}${DIALOG_STYLE}</style>
+      <div class="ov" data-act="backdrop">
+        <div class="dlg" role="dialog" aria-modal="true" aria-label="Schedules" tabindex="-1">
+          <div class="dh">
+            <button class="x" data-act="close-dialog" aria-label="Close">✕</button>
+            <div class="dtl"><b>Schedules</b><span>${esc(sub)}</span></div>
+            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
+          </div>
+          ${this._list && !unreachable ? `<div class="used">${this._list.length} of ${MAX_SCHEDULES} used</div>` : ""}
+          ${this._confirmClose ? `
+          <div class="banner warn confirm">Discard your unsaved changes?
+            <span><button class="btn" data-act="confirm-keep">Keep editing</button><button class="btn danger" data-act="confirm-discard">Discard</button></span>
+          </div>` : ""}
+          ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
+          ${body}
+        </div>
+      </div>`;
+    this._bind(this._dialog.shadowRoot);
+    const dlg = this._dialog.shadowRoot.querySelector(".dlg");
+    if (dlg && !this._dialog.contains(document.activeElement)) dlg.focus({ preventScroll: true });
   }
 
   _renderEditor() {
@@ -599,7 +708,7 @@ class GodrejAerCard extends HTMLElement {
 
   _onAction(ev, el) {
     const act = el.dataset.act;
-    if (act !== "edit") ev.stopPropagation();
+    if (act !== "edit" && act !== "edit-pop" && act !== "backdrop") ev.stopPropagation();
     const e = this._editing;
     if (act !== "menu") this._menu = false;
     switch (act) {
@@ -619,12 +728,36 @@ class GodrejAerCard extends HTMLElement {
       case "info":
         this._moreInfo(el.dataset.entity);
         return;
-      case "open":
-        this._setOpen(true);
+      case "dialog":
+        this._openDialog();
         break;
-      case "close":
-        this._setOpen(false);
+      case "edit-pop":
+      case "add-pop": {
+        if (this._busy) return;
+        this._openDialog();
+        if (act === "add-pop") {
+          this._editing = { index: -1, schedule: { days: ["mon", "tue", "wed", "thu", "fri"], start: "07:00", end: "10:00", interval: 20 }, error: null };
+        } else {
+          const i = Number(el.dataset.index);
+          const s = this._list[i];
+          this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
+        }
         break;
+      }
+      case "backdrop":
+        if (ev.target !== el) return; // a click inside the dialog
+        this._closeDialog();
+        return;
+      case "close-dialog":
+        this._closeDialog();
+        return;
+      case "confirm-keep":
+        this._confirmClose = false;
+        break;
+      case "confirm-discard":
+        this._closeDialog(true);
+        this._render();
+        return;
       case "refresh":
         {
           const { domain, service, target } = this._refreshCall;
@@ -639,7 +772,6 @@ class GodrejAerCard extends HTMLElement {
         break;
       case "edit": {
         if (this._busy || this._editing) return;
-        this._setOpen(true);
         const i = Number(el.dataset.index);
         const s = this._list[i];
         this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
@@ -708,6 +840,25 @@ class GodrejAerCard extends HTMLElement {
 
 
 
+const DIALOG_STYLE = `
+  .ov { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.55); }
+  .dlg { display: flex; flex-direction: column; gap: 10px; box-sizing: border-box; width: 480px; max-width: calc(100vw - 32px); max-height: 88vh; overflow: auto;
+         padding: 0 20px 20px; border-radius: 24px; outline: none; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+         background: var(--card-background-color, #fff); color: var(--primary-text-color); font-family: var(--ha-font-family-body, Roboto, sans-serif); }
+  .dh { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 14px 0 4px; background: var(--card-background-color, #fff); }
+  .dh .x { width: 40px; height: 40px; border-radius: 20px; border: none; background: none; color: var(--primary-text-color); font-size: 20px; }
+  .dtl { flex-grow: 1; min-width: 0; }
+  .dtl b { display: block; font-size: 20px; font-weight: 400; }
+  .dtl span { display: block; font-size: 13px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .savebar { position: sticky; bottom: 0; }
+  .confirm { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .confirm span { display: flex; gap: 8px; }
+  @media (max-width: 600px) {
+    .ov { align-items: stretch; }
+    .dlg { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; padding: 0 16px 16px; }
+  }
+`;
+
 const STYLE = `
   ha-card { padding: 16px; display: flex; flex-direction: column; gap: 10px; position: relative; container-type: inline-size; }
   .top { display: flex; align-items: flex-start; gap: 6px; position: relative; }
@@ -744,7 +895,19 @@ const STYLE = `
   @container (max-width: 340px) { .ctrl { grid-template-columns: 1fr; } }
   .sect { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
   .sect b { flex-grow: 1; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
-  .used { font-size: 13px; color: var(--secondary-text-color); margin-top: -8px; }
+  .used { font-size: 13px; color: var(--secondary-text-color); }
+  .row { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; gap: 4px 8px; align-items: center; min-height: 62px; box-sizing: border-box; }
+  .row .t { font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
+  .row .every { display: flex; align-items: center; gap: 6px; height: 20px; font-size: 13px; color: var(--secondary-text-color); }
+  .chipx { font-size: 11px; font-weight: 600; padding: 0 8px; border-radius: 10px; line-height: 18px; background: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .chipn { font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 10px; line-height: 16px; border: 1px solid var(--primary-color); color: var(--primary-color); }
+  .skipl { justify-self: end; height: 20px; padding: 0; border: none; background: none; color: var(--primary-color); font-size: 13px; font-weight: 500; }
+  .slot { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px 0 12px; border-radius: 12px; background: var(--secondary-background-color); font-size: 14px; }
+  .slot b { font-weight: 500; font-size: 15px; color: var(--primary-text-color); }
+  .slot .grow { flex-grow: 1; }
+  .slot .slabel { color: var(--secondary-text-color); }
+  .slot .pill { font-size: 12px; padding: 3px 10px; }
+  .btn.small { min-height: 32px; padding: 0 14px; font-size: 13px; }
   .link { border: none; background: none; padding: 6px 0; color: var(--primary-color); font-size: 14px; font-weight: 500; }
 
   .head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
@@ -753,20 +916,17 @@ const STYLE = `
   .note, .empty, .hint { font-size: 13px; color: var(--secondary-text-color); }
   .banner { font-size: 13px; padding: 8px 12px; border-radius: 10px; background: var(--secondary-background-color); color: var(--primary-text-color); }
   .banner.warn { border-left: 4px solid var(--error-color); }
-  .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px;
+  .row { padding: 10px 12px; border-radius: 12px;
          background: var(--secondary-background-color); cursor: pointer; }
   .dim { opacity: 0.45; pointer-events: none; }
   .editor.inline { border: 2px solid var(--primary-color); }
   .savebar .quiet { font-weight: 400; color: var(--secondary-text-color); }
   .hicon { color: var(--state-icon-color, var(--primary-color)); --mdc-icon-size: 24px; }
   .names { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }
-  .when b { display: block; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
-  .when span { font-size: 13px; color: var(--secondary-text-color); }
   .days { display: flex; gap: 2px; }
   .d { width: 20px; height: 20px; border-radius: 10px; font-size: 11px; display: inline-flex; align-items: center; justify-content: center;
        border: 1px solid var(--divider-color); color: var(--secondary-text-color); }
   .d.on { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
-  .runline { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .pill { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 12px; background: var(--primary-color); color: var(--text-primary-color, #fff); }
   .foot { display: flex; justify-content: flex-end; }
   .savebar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: var(--secondary-background-color); }
@@ -860,7 +1020,7 @@ class GodrejAerCardEditor extends HTMLElement {
     if (!this._config || !this._hass) return;
     if (!this._form) {
       this._form = document.createElement("ha-form");
-      this._form.computeLabel = (field) => ({ device: "Device", title: "Title (optional)" })[field.name] || field.name;
+      this._form.computeLabel = (field) => ({ device: "Device", title: "Title (optional)", show_schedules: "Show every schedule on the card" })[field.name] || field.name;
       this._form.addEventListener("value-changed", (ev) => {
         const config = { ...ev.detail.value };
         if (!config.title) delete config.title;
@@ -875,6 +1035,7 @@ class GodrejAerCardEditor extends HTMLElement {
     this._form.schema = [
       { name: "device", required: true, selector: { device: { filter: DOMAINS.map((integration) => ({ integration })) } } },
       { name: "title", selector: { text: {} } },
+      { name: "show_schedules", selector: { boolean: {} } },
     ];
   }
 }

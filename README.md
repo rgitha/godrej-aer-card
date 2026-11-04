@@ -35,6 +35,7 @@ device: <your Smart Matic device>
 |---|---|---|
 | `device` | yes | The Smart Matic device. |
 | `title` | no | Card title. Defaults to the device name. |
+| `show_schedules` | no | Show every schedule on the card instead of one line. |
 
 ## What it shows
 
@@ -45,24 +46,30 @@ device: <your Smart Matic device>
   below 20 %.
 - **Spray now** and **Auto** (Off, 10, 20 or 40 minutes). While a schedule
   runs, Auto is greyed out: the device ignores it, and tapping it shows why.
-- **Schedules:** folded by default, with **Show all** to open the full list.
-  While a schedule runs, it is shown under the heading with **Skip this run**.
-  Whether the list is open is remembered per browser.
+- **Schedules:** one line, always the same height: the running schedule with
+  **Skip**, or the next one ("Next 07:00 – 10:00 · today"). **Show all** opens
+  the schedules pop-up. With `show_schedules: true`, every schedule is shown
+  instead, and a running one is marked inside its row, so the card never
+  changes height by itself.
 - When the device can't be reached, everything is greyed out under a notice.
 
 ### Editing schedules
 
-- Tap a schedule to edit it in place; the rest of the card is greyed out
-  until you press Done or Cancel.
+Schedules are edited in a pop-up: **Show all** or **Edit**, or tap a
+schedule. On a phone it fills the screen.
+
+- Tap a schedule to edit it in place; the rest is greyed out until you press
+  Done or Cancel.
 - Days (or Weekdays, Weekends, Every day), start and end (or Morning,
   Afternoon, Evening) and the interval. The end is rounded down to a whole
   interval, shown as you edit: "Ends at 10:00 (9 sprays)". An end at or before
   the start runs into the next day, up to 24 hours, and shows as "(+1)".
   Overlaps (including into the next day) and more than 10 schedules are
   refused.
-- Edits stay in the card until you press **Save**, which writes the whole
-  list to the device. If the device's schedules changed meanwhile, the card
-  asks whether to keep them or overwrite them.
+- Edits stay in the pop-up until you press **Save**, which writes the whole
+  list to the device. If the device's schedules changed meanwhile, it asks
+  whether to keep them or overwrite them. Closing with unsaved changes asks
+  first.
 - While a schedule runs, the editor warns that saving any change stops it
   until its next start: the device replaces the whole list and starts a
   schedule only at its start time.
@@ -70,7 +77,7 @@ device: <your Smart Matic device>
 ## Upgrading from the schedule card
 
 Dashboards using `custom:godrej-aer-schedule-card` with `entity:` keep
-working and show the schedules only. To get the full card, change it to
+working and show every schedule, edited in the same pop-up. To get the full card, change it to
 `custom:godrej-aer-card` and pick the device.
 
 ## Disclaimer

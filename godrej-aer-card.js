@@ -83,19 +83,25 @@ function fromAttribute(item) {
 const forAction = (s) => ({ days: [...s.days], start: s.start, end: s.end, interval: s.interval });
 
 /** Problems with one schedule against the rest of the list (index = its place, or -1 if new). */
-function problems(schedule, list, index) {
-  if (!schedule.days.length) return "Pick at least one day.";
-  const { sprays } = rounded(schedule.start, schedule.end, schedule.interval);
-  if (sprays < 1) return `The window is shorter than one ${schedule.interval}-minute interval.`;
-  const others = list.filter((_, i) => i !== index);
-  if (index < 0 && others.length >= MAX_SCHEDULES) return `The device holds at most ${MAX_SCHEDULES} schedules.`;
-  // A window past midnight also counts against the next day's windows.
-  const mine = windows(schedule);
-  for (const other of others) {
-    const clash = windows(other).some(([oS, oE]) => mine.some(([s, e]) => s < oE && oS < e));
-    if (clash) return `This overlaps ${other.start} – ${endLabel(other)}.`;
+/** What's wrong with each schedule in the list (null if nothing). */
+function listProblems(list) {
+  return list.map((s, i) => {
+    if (!s.days.length) return "Pick at least one day.";
+    if (rounded(s.start, s.end, s.interval).sprays < 1) return `The window is shorter than one ${s.interval}-minute interval.`;
+    // A window past midnight also counts against the next day's windows.
+    const mine = windows(s);
+    const clash = list.some((o, j) => j !== i && windows(o).some(([oS, oE]) => mine.some(([a, b]) => a < oE && oS < b)));
+    return clash ? "Schedules are overlapping." : null;
+  });
+}
+
+/** A new schedule: weekdays, in the first preset window that's still free. */
+function newSchedule(list) {
+  for (const [, start, end] of TIME_PRESETS) {
+    const s = { days: ["mon", "tue", "wed", "thu", "fri"], start, end, interval: 20 };
+    if (!listProblems([...list, s])[list.length]) return s;
   }
-  return null;
+  return { days: ["mon", "tue", "wed", "thu", "fri"], start: TIME_PRESETS[0][1], end: TIME_PRESETS[0][2], interval: 20 };
 }
 
 function ago(iso) {
@@ -173,6 +179,7 @@ const ICON = {
   refill: "M12,20A6,6 0 0,1 6,14C6,10 12,3.25 12,3.25C12,3.25 18,10 18,14A6,6 0 0,1 12,20Z",
   spray: "M3,15H5V21H3V15M7,13H13V21H7V13M8,9H12V12H8V9M15,11H17V13H15V11M19,9H21V11H19V9M19,13H21V15H19V13M17,7H19V9H17V7M17,15H19V17H17V15Z",
   refresh: "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z",
+  chevronUp: "M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z",
   dots: "M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z",
 };
 const svg = (path, size = 20) =>
@@ -199,7 +206,7 @@ class GodrejAerCard extends HTMLElement {
     this._list = null; // the schedules shown (edited copy while dirty)
     this._baseline = null; // the device's list the edits started from
     this._dirty = false;
-    this._editing = null; // { index, schedule, error }
+    this._open = -1; // the schedule unfolded for editing in the pop-up
     this._conflict = false;
     this._busy = null; // "save" | "refresh" | "skip" | "spray" | "auto" | "menu-*"
     this._error = null;
@@ -238,7 +245,7 @@ class GodrejAerCard extends HTMLElement {
   }
 
   getCardSize() {
-    return this._layout === "schedules" ? 3 + (this._list ? this._list.length : 0) : 5;
+    return this._layout === "schedules" ? 3 + this._deviceList(this._sched).length : 5;
   }
 
   get _deviceId() {
@@ -355,12 +362,15 @@ class GodrejAerCard extends HTMLElement {
     this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId }, bubbles: true, composed: true }));
   }
 
-  async _save(overwrite) {
+  /** close: the user had tried to close the pop-up; close it once saved. */
+  async _save(overwrite, close = false) {
     this._conflict = false;
     const data = { schedules: this._list.map(forAction) };
     if (!overwrite) data.expected = this._baseline.map(forAction);
     if (await this._call("save", "set_schedules", data)) {
       this._dirty = false; // the read-back updates the sensor and the list
+      this._open = -1;
+      if (close) this._closeDialog(true);
       this._reload();
     }
   }
@@ -476,7 +486,7 @@ class GodrejAerCard extends HTMLElement {
         <ha-icon class="hicon" icon="mdi:calendar-clock"></ha-icon>
         <div class="names">
           <div class="title">${esc(name)}</div>
-          <div class="sub">${this._list && usable ? `${this._list.length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
+          <div class="sub">${this._list && usable ? `${this._deviceList(state).length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
         </div>
         <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : "⟳"}</button>
       </div>
@@ -497,16 +507,24 @@ class GodrejAerCard extends HTMLElement {
     // One line, always the same height: the running schedule, or the next.
     return `
       <div class="sect"><b>Schedules</b><button class="link" data-act="dialog">Show all</button></div>
-      ${this._renderSlot(this._runningIndex(state))}`;
+      ${this._renderSlot(state)}`;
   }
 
-  _renderSlot(runningAt) {
-    if (runningAt >= 0) {
-      const s = this._list[runningAt];
+  /** The device's schedules, as last read: the card shows only these, never
+   * unsaved edits from the pop-up. */
+  _deviceList(state) {
+    return ((state && state.attributes.schedules) || []).map(fromAttribute);
+  }
+
+  _renderSlot(state) {
+    const list = this._deviceList(state);
+    const runningAt = (state.attributes.running || 0) - 1;
+    if (list[runningAt]) {
+      const s = list[runningAt];
       return `<div class="slot"><span class="chipx">Running</span><b>${esc(s.start)} – ${esc(endLabel(s))}</b><span class="grow"></span>
         <button class="btn small" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button></div>`;
     }
-    const next = nextRun(this._list, new Date());
+    const next = nextRun(list, new Date());
     if (!next) {
       return `<div class="slot"><span class="slabel">No schedules</span><span class="grow"></span>
         <button class="btn small" data-act="add-pop">+ Add</button></div>`;
@@ -516,9 +534,10 @@ class GodrejAerCard extends HTMLElement {
 
   /** Every schedule, read-only; tap one (or Edit) to edit it in the pop-up. */
   _renderInline(state, heading) {
-    const runningAt = this._runningIndex(state);
-    const nextAt = this._nextIndex();
-    const rows = this._list.map((s, i) => this._renderRow(s, i, runningAt === i, "edit-pop", "", nextAt === i)).join("");
+    const list = this._deviceList(state);
+    const runningAt = (state.attributes.running || 0) - 1;
+    const nextAt = this._nextIndex(list);
+    const rows = list.map((s, i) => this._renderRow(s, i, runningAt === i, "edit-pop", "", nextAt === i)).join("");
     return `
       ${heading ? `<div class="sect"><b>Schedules</b><button class="link" data-act="dialog">Edit</button></div>` : ""}
       ${rows || `<div class="slot"><span class="slabel">No schedules</span><span class="grow"></span><button class="btn small" data-act="add-pop">+ Add</button></div>`}
@@ -538,45 +557,47 @@ class GodrejAerCard extends HTMLElement {
 
   /** One schedule, always the same height: running shows inside it. */
   /** The list index of the schedule starting next, if within 24 hours. */
-  _nextIndex() {
-    const next = this._list ? nextRun(this._list, new Date()) : null;
-    return next && next.inMinutes <= DAY ? this._list.indexOf(next.schedule) : -1;
+  _nextIndex(list = this._list) {
+    const next = list ? nextRun(list, new Date()) : null;
+    return next && next.inMinutes <= DAY ? list.indexOf(next.schedule) : -1;
   }
 
-  _renderRow(s, i, isRunning, act, dim = "", isNext = false) {
+  _renderRow(s, i, isRunning, act, dim = "", isNext = false, problem = null) {
     const end = endLabel(s);
     return `
-        <div class="row ${dim}" data-act="${act}" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
+        <div class="row ${dim} ${problem ? "bad" : ""}" data-act="${act}" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
           <b class="t">${esc(s.start)} – ${esc(end)}</b>
           <div class="days">${DAYS.map((d) => `<span class="d ${s.days.includes(d) ? "on" : ""}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</span>`).join("")}</div>
           <div class="every">${isRunning ? `<span class="chipx">Running</span>` : isNext ? `<span class="chipn">Next</span>` : ""}every ${s.interval} min</div>
-          ${isRunning ? `<button class="skipl" data-act="skip" ${this._busy || this._editing ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
+          ${isRunning ? `<button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
+          ${problem ? `<div class="prob">${esc(problem)}</div>` : ""}
         </div>`;
   }
 
   /** The pop-up's list: edit in place, add, save. */
   _renderDialogList(state) {
-    const editing = this._editing;
     const runningAt = this._runningIndex(state);
-    const dim = editing ? "dim" : "";
     // Next is worked out from the list as it stands, edits included.
     const nextAt = this._nextIndex();
+    const bad = listProblems(this._list);
+    const broken = bad.some(Boolean);
     const rows = this._list
-      .map((s, i) => (editing && editing.index === i ? this._renderEditor() : this._renderRow(s, i, runningAt === i, "edit", dim, nextAt === i)))
+      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i]) : this._renderRow(s, i, runningAt === i, "edit", "", nextAt === i, bad[i])))
       .join("");
-    const adding = editing && editing.index < 0 ? this._renderEditor() : "";
-    const off = this._busy || editing;
-    const saveOff = off || !this._dirty;
+    // Trying to close with changes asks first; Save with a problem left
+    // says to check the schedules. Editing again clears both.
+    const ask = this._confirmClose && this._dirty;
+    const check = this._check && broken;
+    const text = ask ? "Discard changes?" : check ? "Check the schedules" : this._dirty ? "Changes not saved" : "No changes";
     return `
-      ${rows || (adding ? "" : `<div class="empty">No schedules.</div>`)}
-      ${adding}
+      ${rows || `<div class="empty">No schedules.</div>`}
       <div class="foot">
-        <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || off ? "disabled" : ""}>+ Add schedule</button>
+        <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._busy ? "disabled" : ""}>+ Add schedule</button>
       </div>
-      <div class="savebar ${editing ? "dim" : ""}">
-        <span class="${this._dirty ? "" : "quiet"}">${this._dirty ? "Changes not saved" : "No changes"}${this._dirty && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
-        <button class="btn" data-act="discard" ${saveOff ? "disabled" : ""}>Discard</button>
-        <button class="btn primary" data-act="save" ${saveOff ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
+      <div class="savebar ${ask || check ? "ask" : ""}">
+        <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
+        ${ask ? `<button class="btn danger" data-act="discard" ${this._busy ? "disabled" : ""}>Discard</button>` : ""}
+        <button class="btn primary" data-act="save" ${this._busy || !this._dirty ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
       </div>
       ${this._conflict ? this._renderConflict() : ""}`;
   }
@@ -592,6 +613,7 @@ class GodrejAerCard extends HTMLElement {
     }
     this._dialogOpen = true;
     this._confirmClose = false;
+    this._check = false;
     this._error = null;
   }
 
@@ -602,12 +624,9 @@ class GodrejAerCard extends HTMLElement {
     return key(this._list) !== key(this._baseline);
   }
 
-  /** Something would be lost by closing: saved-for-later edits, or an
-   * open editor whose schedule differs from what it started as. */
+  /** Something would be lost by closing. */
   get _hasChanges() {
-    if (this._dirty) return true;
-    const e = this._editing;
-    return !!e && JSON.stringify(forAction(e.schedule)) !== e.started;
+    return this._dirty;
   }
 
   /** Back pressed while the pop-up is open. */
@@ -638,7 +657,7 @@ class GodrejAerCard extends HTMLElement {
     }
     this._dialogOpen = false;
     this._confirmClose = false;
-    this._editing = null;
+    this._open = -1;
     this._conflict = false;
     if (this._dirty) {
       this._dirty = false;
@@ -682,10 +701,6 @@ class GodrejAerCard extends HTMLElement {
             <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : svg(ICON.refresh)}</button>
           </div>
           ${this._list && !unreachable ? `<div class="used">${this._list.length} of ${MAX_SCHEDULES} used</div>` : ""}
-          ${this._confirmClose ? `
-          <div class="banner warn confirm">Discard your unsaved changes?
-            <span><button class="btn" data-act="confirm-keep">Keep editing</button><button class="btn danger" data-act="confirm-discard">Discard</button></span>
-          </div>` : ""}
           ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
           ${body}
         </div>
@@ -695,8 +710,8 @@ class GodrejAerCard extends HTMLElement {
     if (dlg && !this._dialog.contains(document.activeElement)) dlg.focus({ preventScroll: true });
   }
 
-  _renderEditor() {
-    const { index, schedule: s, error } = this._editing;
+  _renderEditor(index, problem) {
+    const s = this._list[index];
     const warn = this._runningNow
       ? `<div class="banner warn">A schedule is running. Saving will interrupt it.</div>`
       : "";
@@ -706,9 +721,12 @@ class GodrejAerCard extends HTMLElement {
       ? `Ends at ${toHHMM(nextDay ? r.endMinutes - DAY : r.endMinutes)}${nextDay ? " the next day" : ""} (${r.sprays} spray${r.sprays === 1 ? "" : "s"})`
       : "";
     return `
-      <div class="editor inline" role="group" aria-label="${index < 0 ? "Add schedule" : "Edit schedule"}">
+      <div class="editor inline ${problem ? "bad" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
+        <div class="etitle" data-act="fold" role="button" tabindex="0" aria-label="Fold">
+          <span>${esc(s.start)} – ${esc(endLabel(s))}<small>${index + 1} of ${this._list.length}</small></span>
+          <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
+        </div>
         ${warn}
-        <div class="etitle">${index < 0 ? "Add schedule" : `Edit schedule<small>${index + 1} of ${this._list.length}</small>`}</div>
         <div class="lbl"><span>Days</span>${DAY_PRESETS.map(([label], i) => `<button class="chip" data-act="days" data-preset="${i}">${label}</button>`).join("")}</div>
         <div class="dayrow">${DAYS.map((d) => `<button class="dt ${s.days.includes(d) ? "on" : ""}" data-act="day" data-day="${d}" aria-pressed="${s.days.includes(d)}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</button>`).join("")}</div>
         <div class="lbl"><span>Time</span>${TIME_PRESETS.map(([label], i) => `<button class="chip" data-act="time" data-preset="${i}">${label}</button>`).join("")}</div>
@@ -719,13 +737,10 @@ class GodrejAerCard extends HTMLElement {
         <div class="lbl"><span>Interval</span></div>
         <div class="seg">${INTERVALS.map((n) => `<button class="${s.interval === n ? "on" : ""}" data-act="interval" data-value="${n}">${n} min</button>`).join("")}</div>
         <div class="hint">${esc(hint)}</div>
-        ${error ? `<div class="banner warn">${esc(error)}</div>` : ""}
+        ${problem ? `<div class="prob">${esc(problem)}</div>` : ""}
         <div class="acts">
-          ${index >= 0 ? `<button class="btn danger" data-act="delete">Delete</button>` : "<span></span>"}
-          <span>
-            <button class="btn" data-act="cancel">Cancel</button>
-            <button class="btn primary" data-act="done">Done</button>
-          </span>
+          <button class="btn danger" data-act="delete">Delete</button>
+          <span></span>
         </div>
       </div>`;
   }
@@ -750,8 +765,13 @@ class GodrejAerCard extends HTMLElement {
   _onAction(ev, el) {
     const act = el.dataset.act;
     if (act !== "edit" && act !== "edit-pop" && act !== "backdrop") ev.stopPropagation();
-    const e = this._editing;
+    const e = this._open >= 0 ? this._list[this._open] : null;
     if (act !== "menu") this._menu = false;
+    // Save or Discard after trying to close finishes closing; anything
+    // else carries on editing.
+    const closing = this._confirmClose;
+    if (closing && act !== "close-dialog" && act !== "backdrop") this._confirmClose = false;
+    if (act !== "save") this._check = false;
     switch (act) {
       case "menu":
         this._menu = !this._menu;
@@ -776,15 +796,8 @@ class GodrejAerCard extends HTMLElement {
       case "add-pop": {
         if (this._busy) return;
         this._openDialog();
-        if (act === "add-pop") {
-          this._editing = { index: -1, schedule: { days: ["mon", "tue", "wed", "thu", "fri"], start: "07:00", end: "10:00", interval: 20 }, error: null };
-          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
-        } else {
-          const i = Number(el.dataset.index);
-          const s = this._list[i];
-          this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
-          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
-        }
+        if (act === "add-pop") this._add();
+        else this._open = Number(el.dataset.index);
         break;
       }
       case "backdrop":
@@ -793,13 +806,6 @@ class GodrejAerCard extends HTMLElement {
         return;
       case "close-dialog":
         this._closeDialog();
-        return;
-      case "confirm-keep":
-        this._confirmClose = false;
-        break;
-      case "confirm-discard":
-        this._closeDialog(true);
-        this._render();
         return;
       case "refresh":
         {
@@ -812,63 +818,52 @@ class GodrejAerCard extends HTMLElement {
         this._call("skip", "stop_schedule", { schedule: "current" });
         return;
       case "add":
-        this._editing = { index: -1, schedule: { days: ["mon", "tue", "wed", "thu", "fri"], start: "07:00", end: "10:00", interval: 20 }, error: null };
-          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
+        if (this._busy) return;
+        this._add();
         break;
-      case "edit": {
-        if (this._busy || this._editing) return;
-        const i = Number(el.dataset.index);
-        const s = this._list[i];
-        this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
-          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
+      case "edit":
+        if (this._busy) return;
+        this._open = Number(el.dataset.index);
         break;
-      }
+      case "fold":
+        this._open = -1;
+        break;
       case "day": {
         const d = el.dataset.day;
-        e.schedule.days = e.schedule.days.includes(d) ? e.schedule.days.filter((x) => x !== d) : DAYS.filter((x) => x === d || e.schedule.days.includes(x));
+        e.days = e.days.includes(d) ? e.days.filter((x) => x !== d) : DAYS.filter((x) => x === d || e.days.includes(x));
         break;
       }
       case "days":
-        e.schedule.days = [...DAY_PRESETS[Number(el.dataset.preset)][1]];
+        e.days = [...DAY_PRESETS[Number(el.dataset.preset)][1]];
         break;
       case "time": {
         const [, start, end] = TIME_PRESETS[Number(el.dataset.preset)];
-        Object.assign(e.schedule, { start, end });
+        Object.assign(e, { start, end });
         break;
       }
       case "start":
       case "end":
-        if (el.value) e.schedule[act] = el.value.slice(0, 5);
+        if (el.value) e[act] = el.value.slice(0, 5);
         break;
       case "interval":
-        e.schedule.interval = Number(el.dataset.value);
-        break;
-      case "cancel":
-        this._editing = null;
+        e.interval = Number(el.dataset.value);
         break;
       case "delete":
-        this._list.splice(e.index, 1);
-        this._dirty = this._differs();
-        this._editing = null;
+        this._list.splice(this._open, 1);
+        this._open = -1;
         break;
-      case "done": {
-        const problem = problems(e.schedule, this._list, e.index);
-        if (problem) {
-          e.error = problem;
-          break;
-        }
-        if (e.index < 0) this._list.push(e.schedule);
-        else this._list[e.index] = e.schedule;
-        this._dirty = this._differs();
-        this._editing = null;
-        break;
-      }
       case "discard":
         this._dirty = false;
+        this._open = -1;
+        if (closing) this._closeDialog(true);
         this._reload();
         return;
       case "save":
-        this._save(false);
+        if (listProblems(this._list).some(Boolean)) {
+          this._check = true;
+          break;
+        }
+        this._save(false, closing);
         return;
       case "overwrite":
         this._save(true);
@@ -879,10 +874,15 @@ class GodrejAerCard extends HTMLElement {
       default:
         return;
     }
-    if (this._editing) this._editing.error = act === "done" ? this._editing.error : null;
-    // The close prompt goes once nothing is left to lose (e.g. after Cancel).
-    if (this._confirmClose && !this._hasChanges) this._confirmClose = false;
+    // Every edit is part of the list: unsaved while it differs from the device's.
+    if (this._list) this._dirty = this._differs();
     this._render();
+  }
+
+  /** Add a schedule to the list, unfolded. */
+  _add() {
+    this._list.push(newSchedule(this._list));
+    this._open = this._list.length - 1;
   }
 }
 
@@ -899,8 +899,11 @@ const DIALOG_STYLE = `
   .dtl b { display: block; font-size: 20px; font-weight: 400; }
   .dtl span { display: block; font-size: 13px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .savebar { position: sticky; bottom: 0; }
-  .confirm { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .confirm span { display: flex; gap: 8px; }
+  .savebar.ask span, .prob { color: var(--error-color); }
+  .row .prob { grid-column: 1 / -1; font-size: 13px; }
+  .prob { font-size: 14px; }
+  .etitle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .fold { display: inline-flex; color: var(--secondary-text-color); }
   @media (max-width: 600px) {
     .ov { align-items: stretch; }
     .dlg { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; padding: 0 16px 16px; }

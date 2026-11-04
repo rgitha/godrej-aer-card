@@ -60,18 +60,25 @@ device: <your Smart Matic device>
 Schedules are edited in a pop-up: **Show all** or **Edit**, or tap a
 schedule. On a phone it fills the screen.
 
-- Tap a schedule to edit it in place; the rest is greyed out until you press
-  Done or Cancel.
+- Tap a schedule to unfold it and edit it in place; tap its header to fold
+  it. **+ Add schedule** adds one, unfolded, in the first free window of
+  Morning, Afternoon or Evening.
 - Days (or Weekdays, Weekends, Every day), start and end (or Morning,
   Afternoon, Evening) and the interval. The end is rounded down to a whole
   interval, shown as you edit: "Ends at 10:00 (9 sprays)". An end at or before
   the start runs into the next day, up to 24 hours, and shows as "(+1)".
-  Overlaps (including into the next day) and more than 10 schedules are
-  refused.
-- Edits stay in the pop-up until you press **Save**, which writes the whole
-  list to the device. If the device's schedules changed meanwhile, it asks
-  whether to keep them or overwrite them. Closing with unsaved changes asks
-  first.
+- Problems show in red on the schedule itself: "Schedules are
+  overlapping" (including into the next day), no days, or a window shorter
+  than one interval.
+- Every change is part of the list until you press **Save**, which writes
+  the whole list to the device. With a problem left, Save says "Check the
+  schedules" instead. If the device's schedules changed meanwhile, it asks
+  whether to keep them or overwrite them.
+- Closing with unsaved changes asks "Discard changes?" in the save bar, with
+  Discard and Save; either then closes the pop-up. Editing again or saving
+  dismisses the question.
+- The card itself shows only the schedules on the device; unsaved edits
+  stay in the pop-up.
 - While a schedule runs, the editor warns that saving will interrupt it: the
   device replaces the whole list. A schedule covering the current time starts
   again within about a minute, with a spray.

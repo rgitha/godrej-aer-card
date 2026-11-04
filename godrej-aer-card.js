@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.2-beta.2";
+const CARD_VERSION = "0.3.2-beta.3";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -628,7 +628,7 @@ class GodrejAerCard extends HTMLElement {
     const bad = listProblems(this._list);
     const broken = bad.some(Boolean);
     const rows = this._list
-      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i]) : this._renderRow(s, i, runningAt === i, "edit", this._busy === "refresh" ? "dim" : "", nextAt === i, bad[i])))
+      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i], runningAt === i, nextAt === i) : this._renderRow(s, i, runningAt === i, "edit", this._busy === "refresh" ? "dim" : "", nextAt === i, bad[i])))
       .join("");
     // Trying to close with changes asks first; Save with a problem left
     // says to check the schedules. Editing again clears both.
@@ -769,7 +769,8 @@ class GodrejAerCard extends HTMLElement {
     if (dlg && !this._dialog.contains(document.activeElement)) dlg.focus({ preventScroll: true });
   }
 
-  _renderEditor(index, problem) {
+  /** isRunning / isNext: as on the folded row, so unfolding keeps them. */
+  _renderEditor(index, problem, isRunning = false, isNext = false) {
     const s = this._list[index];
     const r = rounded(s.start, s.end, s.interval);
     const nextDay = r.endMinutes > DAY;
@@ -779,8 +780,11 @@ class GodrejAerCard extends HTMLElement {
     return `
       <div class="editor inline ${problem ? "bad" : ""} ${this._busy === "refresh" ? "dim" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
         <div class="etitle" data-act="fold" role="button" tabindex="0" aria-label="Fold">
-          <span>${esc(s.start)} – ${esc(endLabel(s))}<small>${index + 1} of ${this._list.length}</small></span>
-          <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
+          <span>${esc(s.start)} – ${esc(endLabel(s))}</span>
+          <span class="ehead">
+            ${isRunning ? `<span class="chipx">Running</span><button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : isNext ? `<span class="chipn">Next</span>` : ""}
+            <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
+          </span>
         </div>
         <div class="lbl"><span>Days</span>${DAY_PRESETS.map(([label], i) => `<button class="chip" data-act="days" data-preset="${i}">${label}</button>`).join("")}</div>
         <div class="dayrow">${DAYS.map((d) => `<button class="dt ${s.days.includes(d) ? "on" : ""}" data-act="day" data-day="${d}" aria-pressed="${s.days.includes(d)}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</button>`).join("")}</div>
@@ -949,6 +953,7 @@ const DIALOG_STYLE = `
   .prob { font-size: 14px; }
   .etitle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
   .fold { display: inline-flex; color: var(--secondary-text-color); }
+  .ehead { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 400; }
   @media (max-width: 600px) {
     .ov { align-items: stretch; }
     .dlg { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; padding: 0 16px 16px; }

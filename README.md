@@ -70,9 +70,9 @@ schedule. On a phone it fills the screen.
   list to the device. If the device's schedules changed meanwhile, it asks
   whether to keep them or overwrite them. Closing with unsaved changes asks
   first.
-- While a schedule runs, the editor warns that saving any change stops it
-  until its next start: the device replaces the whole list and starts a
-  schedule only at its start time.
+- While a schedule runs, the editor warns that saving will interrupt it: the
+  device replaces the whole list. A schedule covering the current time starts
+  again within about a minute, with a spray.
 
 ## Upgrading from the schedule card
 

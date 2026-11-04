@@ -180,14 +180,14 @@ const svg = (path, size = 20) =>
 
 const LOW_BATTERY = 20;
 
-/** "just now", "5m ago", "2h 4m ago", "3d ago". */
+/** "just now", "5m ago", "2h ago", "3d ago". */
 function shortAgo(iso) {
   if (!iso) return "";
   const minutes = Math.floor(Math.max(0, Date.now() - new Date(iso).getTime()) / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""} ago`;
+  if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
 
@@ -227,7 +227,8 @@ class GodrejAerCard extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this._closeDialog(true);
+    // Leaving the dashboard: close without touching the history.
+    this._closeDialog(true, true);
   }
 
   /** Sections view: half a row by default, height as needed (it doesn't
@@ -336,11 +337,11 @@ class GodrejAerCard extends HTMLElement {
   }
 
   /** A control: Home Assistant shows any error as a toast, as on the device page. */
-  async _control(kind, domain, service, data) {
+  async _control(kind, domain, service, data, target) {
     this._busy = kind;
     this._render();
     try {
-      await this._hass.callService(domain, service, data);
+      await this._hass.callService(domain, service, data, target);
     } catch (err) {
       /* shown by Home Assistant */
     } finally {
@@ -573,7 +574,7 @@ class GodrejAerCard extends HTMLElement {
         <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || off ? "disabled" : ""}>+ Add schedule</button>
       </div>
       <div class="savebar ${editing ? "dim" : ""}">
-        <span class="${this._dirty ? "" : "quiet"}">${this._dirty ? "Changes not saved" : "No changes"}${this._dirty && this._runningNow ? `<small>Stops the running schedule</small>` : ""}</span>
+        <span class="${this._dirty ? "" : "quiet"}">${this._dirty ? "Changes not saved" : "No changes"}${this._dirty && this._runningNow ? `<small>Interrupts running schedule</small>` : ""}</span>
         <button class="btn" data-act="discard" ${saveOff ? "disabled" : ""}>Discard</button>
         <button class="btn primary" data-act="save" ${saveOff ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>
       </div>
@@ -583,17 +584,57 @@ class GodrejAerCard extends HTMLElement {
   // --- the schedules pop-up -------------------------------------------------
 
   _openDialog() {
+    if (!this._dialogOpen) {
+      // Back (e.g. on a phone) closes the pop-up instead of the dashboard.
+      history.pushState({ ...(history.state || {}), godrejAerDialog: true }, "");
+      this._onPop = () => this._onBack();
+      window.addEventListener("popstate", this._onPop);
+    }
     this._dialogOpen = true;
     this._confirmClose = false;
     this._error = null;
   }
 
-  /** Close, unless there are unsaved changes: then ask first. */
-  _closeDialog(force = false) {
-    if (!force && (this._dirty || this._editing)) {
+  /** The edited list differs from the device's (Done with nothing
+   * changed, or changes undone by hand, leave nothing to save). */
+  _differs() {
+    const key = (l) => JSON.stringify(l.map(forAction));
+    return key(this._list) !== key(this._baseline);
+  }
+
+  /** Something would be lost by closing: saved-for-later edits, or an
+   * open editor whose schedule differs from what it started as. */
+  get _hasChanges() {
+    if (this._dirty) return true;
+    const e = this._editing;
+    return !!e && JSON.stringify(forAction(e.schedule)) !== e.started;
+  }
+
+  /** Back pressed while the pop-up is open. */
+  _onBack() {
+    if (!this._dialogOpen) return;
+    if (this._hasChanges) {
+      // Ask first, and stay: put the pop-up's history entry back.
+      history.pushState({ ...(history.state || {}), godrejAerDialog: true }, "");
       this._confirmClose = true;
       this._render();
       return;
+    }
+    this._closeDialog(true, true);
+  }
+
+  /** Close, unless there are unsaved changes: then ask first.
+   * fromHistory: Back already removed the pop-up's history entry. */
+  _closeDialog(force = false, fromHistory = false) {
+    if (!force && this._hasChanges) {
+      this._confirmClose = true;
+      this._render();
+      return;
+    }
+    if (this._onPop) {
+      window.removeEventListener("popstate", this._onPop);
+      this._onPop = null;
+      if (!fromHistory && history.state && history.state.godrejAerDialog) history.back();
     }
     this._dialogOpen = false;
     this._confirmClose = false;
@@ -657,7 +698,7 @@ class GodrejAerCard extends HTMLElement {
   _renderEditor() {
     const { index, schedule: s, error } = this._editing;
     const warn = this._runningNow
-      ? `<div class="banner warn">A schedule is running. Saving any change stops it until its next start.</div>`
+      ? `<div class="banner warn">A schedule is running. Saving will interrupt it.</div>`
       : "";
     const r = rounded(s.start, s.end, s.interval);
     const nextDay = r.endMinutes > DAY;
@@ -737,10 +778,12 @@ class GodrejAerCard extends HTMLElement {
         this._openDialog();
         if (act === "add-pop") {
           this._editing = { index: -1, schedule: { days: ["mon", "tue", "wed", "thu", "fri"], start: "07:00", end: "10:00", interval: 20 }, error: null };
+          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
         } else {
           const i = Number(el.dataset.index);
           const s = this._list[i];
           this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
+          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
         }
         break;
       }
@@ -760,8 +803,9 @@ class GodrejAerCard extends HTMLElement {
         return;
       case "refresh":
         {
+          // Like the other controls: a failure shows as Home Assistant's toast.
           const { domain, service, target } = this._refreshCall;
-          this._call("refresh", service, {}, domain, target);
+          this._control("refresh", domain, service, {}, target);
         }
         return;
       case "skip":
@@ -769,12 +813,14 @@ class GodrejAerCard extends HTMLElement {
         return;
       case "add":
         this._editing = { index: -1, schedule: { days: ["mon", "tue", "wed", "thu", "fri"], start: "07:00", end: "10:00", interval: 20 }, error: null };
+          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
         break;
       case "edit": {
         if (this._busy || this._editing) return;
         const i = Number(el.dataset.index);
         const s = this._list[i];
         this._editing = { index: i, schedule: { ...s, days: [...s.days] }, error: null };
+          this._editing.started = JSON.stringify(forAction(this._editing.schedule));
         break;
       }
       case "day": {
@@ -802,7 +848,7 @@ class GodrejAerCard extends HTMLElement {
         break;
       case "delete":
         this._list.splice(e.index, 1);
-        this._dirty = true;
+        this._dirty = this._differs();
         this._editing = null;
         break;
       case "done": {
@@ -813,7 +859,7 @@ class GodrejAerCard extends HTMLElement {
         }
         if (e.index < 0) this._list.push(e.schedule);
         else this._list[e.index] = e.schedule;
-        this._dirty = true;
+        this._dirty = this._differs();
         this._editing = null;
         break;
       }
@@ -834,6 +880,8 @@ class GodrejAerCard extends HTMLElement {
         return;
     }
     if (this._editing) this._editing.error = act === "done" ? this._editing.error : null;
+    // The close prompt goes once nothing is left to lose (e.g. after Cancel).
+    if (this._confirmClose && !this._hasChanges) this._confirmClose = false;
     this._render();
   }
 }

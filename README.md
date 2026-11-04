@@ -4,10 +4,12 @@ A Home Assistant dashboard card for a Godrej Aer Smart Matic, through the
 [godrej_aer](https://github.com/rgitha/godrej_aer) integration: its status,
 Spray now, Auto spray, and the spray schedules stored on the device.
 
+Forked from [ov1d1u/godrej_aer integration](https://github.com/ov1d1u/godrej_aer).
+
 ## Requirements
 
 - The [rgitha/godrej_aer](https://github.com/rgitha/godrej_aer) integration with
-  schedule support.
+  schedule support. It may also work with its upstream [ov1d1u/godrej_aer integration](https://github.com/ov1d1u/godrej_aer).
 
 ## Installation
 
@@ -74,15 +76,9 @@ schedule. On a phone it fills the screen.
   device replaces the whole list. A schedule covering the current time starts
   again within about a minute, with a spray.
 
-## Upgrading from the schedule card
-
-Dashboards using `custom:godrej-aer-schedule-card` with `entity:` keep
-working and show every schedule, edited in the same pop-up. To get the full card, change it to
-`custom:godrej-aer-card` and pick the device.
-
 ## Disclaimer
 
-This is an unofficial project. It is not affiliated with or endorsed by Godrej.
+This is an independent project. It is not affiliated with or endorsed by Godrej.
 
 ## License
 

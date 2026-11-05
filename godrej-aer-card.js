@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.2";
+const CARD_VERSION = "0.3.3";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -36,6 +36,31 @@ const toHHMM = (minutes) => {
   const m = Math.min(Math.max(minutes, 0), 24 * 60 - 1);
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 };
+// Times are shown in the user's format (their Home Assistant profile: 12 or
+// 24 hours, or their language's or browser's convention).
+let timeFormat = null;
+let timeFormatKey = "";
+function setTimeFormat(locale) {
+  const pref = locale && locale.time_format;
+  const lang = (locale && locale.language) || undefined;
+  const key = `${pref}|${lang}`;
+  if (key === timeFormatKey) return;
+  timeFormatKey = key;
+  const opts = { hour: "numeric", minute: "2-digit" };
+  if (pref === "12") opts.hour12 = true;
+  if (pref === "24") Object.assign(opts, { hour: "2-digit", hourCycle: "h23" });
+  try {
+    timeFormat = new Intl.DateTimeFormat(pref === "system" ? undefined : lang, opts);
+  } catch (e) {
+    timeFormat = null;
+  }
+}
+/** A time of day (minutes, or "HH:MM") as the user shows times. */
+function showTime(value) {
+  const minutes = typeof value === "number" ? value : toMinutes(value);
+  const m = Math.min(Math.max(minutes, 0), 24 * 60 - 1);
+  return timeFormat ? timeFormat.format(new Date(2000, 0, 1, Math.floor(m / 60), m % 60)) : toHHMM(m);
+}
 const esc = (text) =>
   String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
@@ -55,7 +80,7 @@ function rounded(start, end, interval) {
 /** The rounded end as HH:MM, with "+1" when it is the next day. */
 function endLabel(s) {
   const end = rounded(s.start, s.end, s.interval).endMinutes;
-  return end > DAY ? `${toHHMM(end - DAY)} (+1)` : toHHMM(end);
+  return end > DAY ? `${showTime(end - DAY)} (+1)` : showTime(end);
 }
 
 /** A schedule's windows as [start, end) minutes from Monday 00:00, wrapping round the week. */
@@ -300,6 +325,7 @@ class GodrejAerCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    setTimeFormat(hass.locale);
     const ents = deviceEntities(hass, this._deviceId);
     if (this._config.entity && !ents.schedules) ents.schedules = this._config.entity;
     // Redraw only when one of ours changed, so an open editor keeps its focus.
@@ -489,8 +515,8 @@ class GodrejAerCard extends HTMLElement {
     const refillLow = refill && Number.isFinite(Number(refill.state)) && Number(refill.state) < LOW_REFILL;
     const menu = this._menu
       ? `<div class="menu" role="menu">
-          ${this._ents.resetRefill ? `<button role="menuitem" data-act="press" data-entity="${this._ents.resetRefill}" ${off ? "disabled" : ""}>Reset refill level</button>` : ""}
-          ${this._ents.identify ? `<button role="menuitem" data-act="press" data-entity="${this._ents.identify}" ${off ? "disabled" : ""}>Identify</button>` : ""}
+          ${this._ents.resetRefill ? `<button role="menuitem" data-act="press" data-entity="${this._ents.resetRefill}" ${off || this._busy ? "disabled" : ""}>${this._busy === "reset" ? "Resetting…" : "Reset refill level"}</button>` : ""}
+          ${this._ents.identify ? `<button role="menuitem" data-act="press" data-entity="${this._ents.identify}" ${off || this._busy ? "disabled" : ""}>${this._busy === "identify" ? "Identifying…" : "Identify"}</button>` : ""}
         </div>`
       : "";
     return `
@@ -518,8 +544,15 @@ class GodrejAerCard extends HTMLElement {
   _renderAuto(auto, held) {
     const options = (auto && auto.attributes.options) || ["Off", "Every 10 min", "Every 20 min", "Every 40 min"];
     const label = (o) => (/(\d+)/.exec(o) || [null, o])[1];
-    return `<div class="seg4 ${held ? "held" : ""}" role="radiogroup" aria-label="Auto spray">${options
-      .map((o) => `<button role="radio" aria-checked="${auto && auto.state === o}" class="${auto && auto.state === o ? "on" : ""}" data-act="auto" data-option="${esc(o)}">${esc(label(o))}</button>`)
+    // Until the device acknowledges a choice, the group is greyed out and the
+    // chosen option shows faintly selected (like Spray now while it sends).
+    const sending = this._busy === "auto";
+    return `<div class="seg4 ${held ? "held" : ""} ${sending ? "sending" : ""}" role="radiogroup" aria-label="Auto spray" aria-busy="${sending}">${options
+      .map((o) => {
+        const pend = sending && o === this._pendingAuto;
+        const on = !sending && auto && auto.state === o;
+        return `<button role="radio" aria-checked="${!!on}" class="${on ? "on" : ""} ${pend ? "pend" : ""}" data-act="auto" data-option="${esc(o)}" ${sending ? "disabled" : ""}>${esc(label(o))}</button>`;
+      })
       .join("")}</div>`;
   }
 
@@ -567,7 +600,7 @@ class GodrejAerCard extends HTMLElement {
     const runningAt = (state.attributes.running || 0) - 1;
     if (list[runningAt]) {
       const s = list[runningAt];
-      return `<div class="slot"><span class="chipx">Running</span><b>${esc(s.start)} – ${esc(endLabel(s))}</b><span class="grow"></span>
+      return `<div class="slot"><span class="chipx">Running</span><b>${esc(showTime(s.start))} – ${esc(endLabel(s))}</b><span class="grow"></span>
         <button class="btn small" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button></div>`;
     }
     const next = nextRun(list, new Date());
@@ -575,7 +608,7 @@ class GodrejAerCard extends HTMLElement {
       return `<div class="slot"><span class="slabel">No schedules</span><span class="grow"></span>
         <button class="btn small" data-act="add-pop">+ Add</button></div>`;
     }
-    return `<div class="slot"><span class="chipn">Next</span><b>${esc(next.schedule.start)} – ${esc(endLabel(next.schedule))}</b><span class="grow"></span><span class="slabel">${esc(next.day)}</span></div>`;
+    return `<div class="slot"><span class="chipn">Next</span><b>${esc(showTime(next.schedule.start))} – ${esc(endLabel(next.schedule))}</b><span class="grow"></span><span class="slabel">${esc(next.day)}</span></div>`;
   }
 
   /** Every schedule, read-only; tap one (or Edit) to edit it in the pop-up. */
@@ -602,17 +635,17 @@ class GodrejAerCard extends HTMLElement {
   }
 
   /** One schedule, always the same height: running shows inside it. */
-  /** The list index of the schedule starting next, if within 24 hours. */
+  /** The list index of the schedule starting next, however far ahead. */
   _nextIndex(list = this._list) {
     const next = list ? nextRun(list, new Date()) : null;
-    return next && next.inMinutes <= DAY ? list.indexOf(next.schedule) : -1;
+    return next ? list.indexOf(next.schedule) : -1;
   }
 
   _renderRow(s, i, isRunning, act, dim = "", isNext = false, problem = null) {
     const end = endLabel(s);
     return `
-        <div class="row ${dim} ${problem ? "bad" : ""}" data-act="${act}" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(s.start)} to ${esc(end)}">
-          <b class="t">${esc(s.start)} – ${esc(end)}</b>
+        <div class="row ${dim} ${problem ? "bad" : ""}" data-act="${act}" data-index="${i}" role="button" tabindex="0" aria-label="Edit ${esc(showTime(s.start))} to ${esc(end)}">
+          <b class="t">${esc(showTime(s.start))} – ${esc(end)}</b>
           <div class="days">${DAYS.map((d) => `<span class="d ${s.days.includes(d) ? "on" : ""}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</span>`).join("")}</div>
           <div class="every">${isRunning ? `<span class="chipx">Running</span>` : isNext ? `<span class="chipn">Next</span>` : ""}every ${s.interval} min</div>
           ${isRunning ? `<button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
@@ -775,12 +808,12 @@ class GodrejAerCard extends HTMLElement {
     const r = rounded(s.start, s.end, s.interval);
     const nextDay = r.endMinutes > DAY;
     const hint = r.sprays >= 1
-      ? `Ends at ${toHHMM(nextDay ? r.endMinutes - DAY : r.endMinutes)}${nextDay ? " the next day" : ""} (${r.sprays} spray${r.sprays === 1 ? "" : "s"})`
+      ? `Ends at ${showTime(nextDay ? r.endMinutes - DAY : r.endMinutes)}${nextDay ? " the next day" : ""} (${r.sprays} spray${r.sprays === 1 ? "" : "s"})`
       : "";
     return `
       <div class="editor inline ${problem ? "bad" : ""} ${this._busy === "refresh" ? "dim" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
         <div class="etitle" data-act="fold" role="button" tabindex="0" aria-label="Fold">
-          <span>${esc(s.start)} – ${esc(endLabel(s))}</span>
+          <span>${esc(showTime(s.start))} – ${esc(endLabel(s))}</span>
           <span class="ehead">
             ${isRunning ? `<span class="chipx">Running</span><button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : isNext ? `<span class="chipn">Next</span>` : ""}
             <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
@@ -809,7 +842,8 @@ class GodrejAerCard extends HTMLElement {
     if (act !== "edit" && act !== "edit-pop" && act !== "backdrop") ev.stopPropagation();
     const e = this._open >= 0 ? this._list[this._open] : null;
     if (this._busy === "refresh" && EDIT_ACTS.includes(act)) return;
-    if (act !== "menu") this._menu = false;
+    const menuItem = act === "press" && [this._ents.resetRefill, this._ents.identify].includes(el.dataset.entity);
+    if (act !== "menu" && !menuItem) this._menu = false;
     // Save or Discard after trying to close finishes closing; anything
     // else carries on editing.
     const closing = this._confirmClose;
@@ -823,12 +857,26 @@ class GodrejAerCard extends HTMLElement {
         break;
       case "press": {
         const id = el.dataset.entity;
-        if (id) this._control(id === this._ents.spray ? "spray" : "press", "button", "press", { entity_id: id });
+        if (!id) return;
+        if (menuItem) {
+          // The menu stays open, showing "Resetting…" or "Identifying…",
+          // until the device acknowledges; then it closes.
+          if (this._busy) return;
+          const kind = id === this._ents.resetRefill ? "reset" : "identify";
+          this._control(kind, "button", "press", { entity_id: id }).then(() => {
+            this._menu = false;
+            this._render();
+          });
+          return;
+        }
+        this._control(id === this._ents.spray ? "spray" : "press", "button", "press", { entity_id: id });
         return;
       }
       case "auto":
         // Sent even while a schedule runs: the integration refuses it, and
         // Home Assistant's toast says why.
+        if (this._busy === "auto") return;
+        this._pendingAuto = el.dataset.option;
         if (this._ents.auto) this._control("auto", "select", "select_option", { entity_id: this._ents.auto, option: el.dataset.option });
         return;
       case "info":
@@ -951,7 +999,7 @@ const DIALOG_STYLE = `
   .savebar.ask span, .prob { color: var(--error-color); }
   .row .prob { grid-column: 1 / -1; font-size: 13px; }
   .prob { font-size: 14px; }
-  .etitle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .etitle { display: flex; align-items: center; justify-content: space-between; cursor: pointer; margin-bottom: 8px; }
   .fold { display: inline-flex; color: var(--secondary-text-color); }
   .ehead { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 400; }
   @media (max-width: 600px) {
@@ -1002,16 +1050,18 @@ const STYLE = `
   .seg4 button.on { background: var(--primary-color); color: var(--text-primary-color, #fff); }
   .seg4.held button { opacity: 0.5; }
   .seg4.held button.on { opacity: 0.75; }
+  .seg4.sending button[disabled] { opacity: 0.5; }
+  .seg4.sending button.pend { background: var(--primary-color); color: var(--text-primary-color, #fff); opacity: 0.5; }
   @container (max-width: 340px) { .ctrl { grid-template-columns: 1fr; } }
   .sect { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
   .sect b { flex-grow: 1; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
   .used { font-size: 13px; color: var(--secondary-text-color); }
-  .row { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; gap: 4px 8px; align-items: center; min-height: 62px; box-sizing: border-box; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 4px 8px; align-items: center; min-height: 74px; box-sizing: border-box; }
   .row .t { font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
-  .row .every { display: flex; align-items: center; gap: 6px; height: 20px; font-size: 13px; color: var(--secondary-text-color); }
-  .chipx { font-size: 11px; font-weight: 600; padding: 0 8px; border-radius: 10px; line-height: 18px; background: var(--primary-color); color: var(--text-primary-color, #fff); }
-  .chipn { font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 10px; line-height: 16px; border: 1px solid var(--primary-color); color: var(--primary-color); }
-  .skipl { justify-self: end; height: 20px; padding: 0; border: none; background: none; color: var(--primary-color); font-size: 13px; font-weight: 500; }
+  .row .every { display: flex; align-items: center; gap: 8px; height: 30px; min-width: 0; white-space: nowrap; font-size: 13px; color: var(--secondary-text-color); }
+  .chipx { font-size: 13px; font-weight: 600; padding: 0 10px; border-radius: 12px; line-height: 24px; background: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .chipn { font-size: 13px; font-weight: 600; padding: 0 9px; border-radius: 12px; line-height: 22px; border: 1px solid var(--primary-color); color: var(--primary-color); }
+  .skipl { justify-self: end; height: 30px; padding: 0 14px; border: 1px solid var(--divider-color); border-radius: 15px; background: none; color: var(--primary-color); font-size: 14px; font-weight: 500; }
   .slot { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px 0 12px; border-radius: 12px; background: var(--secondary-background-color); font-size: 14px; }
   .slot b { font-weight: 500; font-size: 15px; color: var(--primary-text-color); }
   .slot .grow { flex-grow: 1; }
@@ -1059,8 +1109,8 @@ const STYLE = `
   .dt { width: 40px; height: 40px; border-radius: 20px; border: 1px solid var(--divider-color); background: none; color: var(--primary-text-color); font-weight: 500; }
   .dt.on { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
   .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .two label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--secondary-text-color); }
-  .two input { min-height: 40px; border-radius: 10px; border: 1px solid var(--divider-color); padding: 0 10px; font: inherit; font-size: 16px;
+  .two label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 13px; color: var(--secondary-text-color); }
+  .two input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 40px; border-radius: 10px; border: 1px solid var(--divider-color); padding: 0 10px; font: inherit; font-size: 16px;
                background: var(--card-background-color); color: var(--primary-text-color); }
   .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--divider-color); border-radius: 18px; overflow: hidden; }
   .seg button { min-height: 40px; border: none; border-right: 1px solid var(--divider-color); background: none; color: var(--primary-text-color); }

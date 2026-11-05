@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.3";
+const CARD_VERSION = "0.3.4-beta.1";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -305,6 +305,28 @@ class GodrejAerCard extends HTMLElement {
   disconnectedCallback() {
     // Leaving the dashboard: close without touching the history.
     this._closeDialog(true, true);
+    this._menu = false;
+    this._watchOutsideMenu();
+  }
+
+  /** While the ⋮ menu is open, a tap anywhere outside it closes it; not
+   * while Reset refill level or Identify waits for the device. */
+  _watchOutsideMenu() {
+    if (this._menu && !this._outsideMenu) {
+      this._outsideMenu = (ev) => {
+        if (this._busy === "reset" || this._busy === "identify") return;
+        const root = this.shadowRoot;
+        const inside = ev.composedPath().some((n) => n && n.classList && root &&
+          (n.classList.contains("menu") || n.classList.contains("more")) && root.contains(n));
+        if (inside) return;
+        this._menu = false;
+        this._render();
+      };
+      document.addEventListener("pointerdown", this._outsideMenu, true);
+    } else if (!this._menu && this._outsideMenu) {
+      document.removeEventListener("pointerdown", this._outsideMenu, true);
+      this._outsideMenu = null;
+    }
   }
 
   /** Sections view: half a row by default, height as needed (it doesn't
@@ -460,6 +482,7 @@ class GodrejAerCard extends HTMLElement {
   // --- rendering -------------------------------------------------------------
 
   _render() {
+    this._watchOutsideMenu();
     if (!this._config || !this.shadowRoot) return;
     let html;
     if (!this._hass) {

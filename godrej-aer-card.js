@@ -7,7 +7,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.4";
+const CARD_VERSION = "0.3.5";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -277,7 +277,10 @@ class GodrejAerCard extends HTMLElement {
     this._dirty = false;
     this._open = -1; // the schedule unfolded for editing in the pop-up
     this._conflict = false;
-    this._busy = null; // "save" | "refresh" | "skip" | "spray" | "auto" | "menu-*"
+    // Actions in progress, each by kind ("save", "refresh", "skip", "spray",
+    // "auto", "reset", "identify"). Several can be under way at once: a
+    // Spray pressed while Auto is being sent leaves Auto's own state alone.
+    this._pending = new Set();
     this._error = null;
     this._menu = false;
     this._dialog = null; // the schedules pop-up's host, on the page
@@ -314,7 +317,7 @@ class GodrejAerCard extends HTMLElement {
   _watchOutsideMenu() {
     if (this._menu && !this._outsideMenu) {
       this._outsideMenu = (ev) => {
-        if (this._busy === "reset" || this._busy === "identify") return;
+        if (this._is("reset") || this._is("identify")) return;
         const root = this.shadowRoot;
         const inside = ev.composedPath().some((n) => n && n.classList && root &&
           (n.classList.contains("menu") || n.classList.contains("more")) && root.contains(n));
@@ -415,8 +418,18 @@ class GodrejAerCard extends HTMLElement {
   }
 
   /** A schedule action: errors show in the card (not as a toast). */
+  /** Whether an action of this kind is in progress. */
+  _is(kind) {
+    return this._pending.has(kind);
+  }
+
+  /** Whether any action is in progress. */
+  get _any() {
+    return this._pending.size > 0;
+  }
+
   async _call(kind, service, data, domain = this._domain, target = this._target) {
-    this._busy = kind;
+    this._pending.add(kind);
     this._error = null;
     this._render();
     try {
@@ -430,21 +443,21 @@ class GodrejAerCard extends HTMLElement {
       }
       return false;
     } finally {
-      this._busy = null;
+      this._pending.delete(kind);
       this._render();
     }
   }
 
   /** A control: Home Assistant shows any error as a toast, as on the device page. */
   async _control(kind, domain, service, data, target) {
-    this._busy = kind;
+    this._pending.add(kind);
     this._render();
     try {
       await this._hass.callService(domain, service, data, target);
     } catch (err) {
       /* shown by Home Assistant */
     } finally {
-      this._busy = null;
+      this._pending.delete(kind);
       this._render();
     }
   }
@@ -538,14 +551,14 @@ class GodrejAerCard extends HTMLElement {
     const refillLow = refill && Number.isFinite(Number(refill.state)) && Number(refill.state) < LOW_REFILL;
     const menu = this._menu
       ? `<div class="menu" role="menu">
-          ${this._ents.resetRefill ? `<button role="menuitem" data-act="press" data-entity="${this._ents.resetRefill}" ${off || this._busy ? "disabled" : ""}>${this._busy === "reset" ? "Resetting…" : "Reset refill level"}</button>` : ""}
-          ${this._ents.identify ? `<button role="menuitem" data-act="press" data-entity="${this._ents.identify}" ${off || this._busy ? "disabled" : ""}>${this._busy === "identify" ? "Identifying…" : "Identify"}</button>` : ""}
+          ${this._ents.resetRefill ? `<button role="menuitem" data-act="press" data-entity="${this._ents.resetRefill}" ${off || this._any ? "disabled" : ""}>${this._is("reset") ? "Resetting…" : "Reset refill level"}</button>` : ""}
+          ${this._ents.identify ? `<button role="menuitem" data-act="press" data-entity="${this._ents.identify}" ${off || this._any ? "disabled" : ""}>${this._is("identify") ? "Identifying…" : "Identify"}</button>` : ""}
         </div>`
       : "";
     return `
       <div class="top">
         <div class="names"><div class="area">${esc(sub)}</div><div class="title">${esc(this._deviceName())}</div></div>
-        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
+        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
         <button class="more" data-act="menu" aria-label="More" aria-haspopup="menu">${svg(ICON.dots)}</button>
         ${menu}
       </div>
@@ -558,7 +571,7 @@ class GodrejAerCard extends HTMLElement {
         ${read ? `<span class="ago" title="Status read ${esc(ago(read))}">${esc(shortAgo(read))}</span>` : ""}
       </div>
       <div class="ctrl ${off ? "dim" : ""}">
-        <button class="sprayb" data-act="press" data-entity="${esc(this._ents.spray || "")}" ${this._busy === "spray" ? "disabled" : ""}>${svg(ICON.spray)}Spray now</button>
+        <button class="sprayb" data-act="press" data-entity="${esc(this._ents.spray || "")}" ${this._is("spray") ? "disabled" : ""}>${svg(ICON.spray)}Spray now</button>
         <div class="autow"><div class="tiny">Auto · minutes</div>${this._renderAuto(auto, mode === "schedule")}</div>
       </div>
       ${this._sched ? this._renderSchedules() : ""}`;
@@ -569,7 +582,7 @@ class GodrejAerCard extends HTMLElement {
     const label = (o) => (/(\d+)/.exec(o) || [null, o])[1];
     // Until the device acknowledges a choice, the group is greyed out and the
     // chosen option shows faintly selected (like Spray now while it sends).
-    const sending = this._busy === "auto";
+    const sending = this._is("auto");
     return `<div class="seg4 ${held ? "held" : ""} ${sending ? "sending" : ""}" role="radiogroup" aria-label="Auto spray" aria-busy="${sending}">${options
       .map((o) => {
         const pend = sending && o === this._pendingAuto;
@@ -590,7 +603,7 @@ class GodrejAerCard extends HTMLElement {
           <div class="title">${esc(name)}</div>
           <div class="sub">${this._list && usable ? `${this._deviceList(state).length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
         </div>
-        <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? "…" : "⟳"}</button>
+        <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? "…" : "⟳"}</button>
       </div>
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
       ${!state ? `<div class="banner warn">Entity ${esc(this._config.entity)} not found.</div>`
@@ -624,7 +637,7 @@ class GodrejAerCard extends HTMLElement {
     if (list[runningAt]) {
       const s = list[runningAt];
       return `<div class="slot"><span class="chipx">Running</span><b>${esc(showTime(s.start))} – ${esc(endLabel(s))}</b><span class="grow"></span>
-        <button class="btn small" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button></div>`;
+        <button class="btn small" data-act="skip" ${this._any ? "disabled" : ""}>${this._is("skip") ? "Skipping…" : "Skip"}</button></div>`;
     }
     const next = nextRun(list, new Date());
     if (!next) {
@@ -671,7 +684,7 @@ class GodrejAerCard extends HTMLElement {
           <b class="t">${esc(showTime(s.start))} – ${esc(end)}</b>
           <div class="days">${DAYS.map((d) => `<span class="d ${s.days.includes(d) ? "on" : ""}" title="${DAY_LABEL[d]}">${DAY_LETTER[d]}</span>`).join("")}</div>
           <div class="every">${isRunning ? `<span class="chipx">Running</span>` : isNext ? `<span class="chipn">Next</span>` : ""}every ${s.interval} min</div>
-          ${isRunning ? `<button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
+          ${isRunning ? `<button class="skipl" data-act="skip" ${this._any ? "disabled" : ""}>${this._is("skip") ? "Skipping…" : "Skip"}</button>` : "<span></span>"}
           ${problem ? `<div class="prob">${esc(problem)}</div>` : ""}
         </div>`;
   }
@@ -684,7 +697,7 @@ class GodrejAerCard extends HTMLElement {
     const bad = listProblems(this._list);
     const broken = bad.some(Boolean);
     const rows = this._list
-      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i], runningAt === i, nextAt === i) : this._renderRow(s, i, runningAt === i, "edit", this._busy === "refresh" ? "dim" : "", nextAt === i, bad[i])))
+      .map((s, i) => (i === this._open ? this._renderEditor(i, bad[i], runningAt === i, nextAt === i) : this._renderRow(s, i, runningAt === i, "edit", this._is("refresh") ? "dim" : "", nextAt === i, bad[i])))
       .join("");
     // Trying to close with changes asks first; Save with a problem left
     // says to check the schedules. Editing again clears both.
@@ -696,15 +709,15 @@ class GodrejAerCard extends HTMLElement {
     return `
       ${rows || `<div class="empty">No schedules.</div>`}
       <div class="foot">
-        <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._busy ? "disabled" : ""}>+ Add schedule</button>
+        <button class="btn" data-act="add" ${this._list.length >= MAX_SCHEDULES || this._any ? "disabled" : ""}>+ Add schedule</button>
       </div>
       <div class="savebar ${ask || check || conflict ? "ask" : ""}">
         <span class="${this._dirty ? "" : "quiet"}">${text}${this._dirty && !ask && !check && !conflict && this._runningNow ? `<small>Saving restarts running schedule.</small>` : ""}</span>
         ${conflict ? `
-        <button class="btn" data-act="keep" ${this._busy ? "disabled" : ""}>Keep device's</button>
-        <button class="btn primary" data-act="overwrite" ${this._busy ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Overwrite"}</button>` : `
-        ${ask ? `<button class="btn danger" data-act="discard" ${this._busy ? "disabled" : ""}>Discard</button>` : ""}
-        <button class="btn primary" data-act="save" ${this._busy || !this._dirty ? "disabled" : ""}>${this._busy === "save" ? "Saving…" : "Save"}</button>`}
+        <button class="btn" data-act="keep" ${this._any ? "disabled" : ""}>Keep device's</button>
+        <button class="btn primary" data-act="overwrite" ${this._any ? "disabled" : ""}>${this._is("save") ? "Saving…" : "Overwrite"}</button>` : `
+        ${ask ? `<button class="btn danger" data-act="discard" ${this._any ? "disabled" : ""}>Discard</button>` : ""}
+        <button class="btn primary" data-act="save" ${this._any || !this._dirty ? "disabled" : ""}>${this._is("save") ? "Saving…" : "Save"}</button>`}
       </div>`;
   }
 
@@ -726,7 +739,7 @@ class GodrejAerCard extends HTMLElement {
     // read is under a minute old. Editing waits for the read.
     const st = this._sched;
     const readAt = st && st.attributes.last_read ? new Date(st.attributes.last_read).getTime() : 0;
-    if (opening && st && st.state !== "unavailable" && !this._busy && Date.now() - readAt > 60000) {
+    if (opening && st && st.state !== "unavailable" && !this._any && Date.now() - readAt > 60000) {
       const { domain, service, target } = this._refreshCall;
       this._control("refresh", domain, service, {}, target);
     }
@@ -813,9 +826,9 @@ class GodrejAerCard extends HTMLElement {
           <div class="dh">
             <button class="x" data-act="close-dialog" aria-label="Close">✕</button>
             <div class="dtl"><b>Schedules</b><span>${esc(sub)}</span></div>
-            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._busy ? "disabled" : ""}>${this._busy === "refresh" ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
+            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
           </div>
-          ${this._list && !unreachable ? `<div class="used">${this._busy === "refresh" ? "Reading schedules…" : `${this._list.length} of ${MAX_SCHEDULES} used`}</div>` : ""}
+          ${this._list && !unreachable ? `<div class="used">${this._is("refresh") ? "Reading schedules…" : `${this._list.length} of ${MAX_SCHEDULES} used`}</div>` : ""}
           ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
           ${body}
         </div>
@@ -834,11 +847,11 @@ class GodrejAerCard extends HTMLElement {
       ? `Ends at ${showTime(nextDay ? r.endMinutes - DAY : r.endMinutes)}${nextDay ? " the next day" : ""} (${r.sprays} spray${r.sprays === 1 ? "" : "s"})`
       : "";
     return `
-      <div class="editor inline ${problem ? "bad" : ""} ${this._busy === "refresh" ? "dim" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
+      <div class="editor inline ${problem ? "bad" : ""} ${this._is("refresh") ? "dim" : ""}" role="group" aria-label="Edit schedule ${index + 1}">
         <div class="etitle" data-act="fold" role="button" tabindex="0" aria-label="Fold">
           <span>${esc(showTime(s.start))} – ${esc(endLabel(s))}</span>
           <span class="ehead">
-            ${isRunning ? `<span class="chipx">Running</span><button class="skipl" data-act="skip" ${this._busy ? "disabled" : ""}>${this._busy === "skip" ? "Skipping…" : "Skip"}</button>` : isNext ? `<span class="chipn">Next</span>` : ""}
+            ${isRunning ? `<span class="chipx">Running</span><button class="skipl" data-act="skip" ${this._any ? "disabled" : ""}>${this._is("skip") ? "Skipping…" : "Skip"}</button>` : isNext ? `<span class="chipn">Next</span>` : ""}
             <span class="fold" aria-hidden="true">${svg(ICON.chevronUp)}</span>
           </span>
         </div>
@@ -864,7 +877,7 @@ class GodrejAerCard extends HTMLElement {
     const act = el.dataset.act;
     if (act !== "edit" && act !== "edit-pop" && act !== "backdrop") ev.stopPropagation();
     const e = this._open >= 0 ? this._list[this._open] : null;
-    if (this._busy === "refresh" && EDIT_ACTS.includes(act)) return;
+    if (this._is("refresh") && EDIT_ACTS.includes(act)) return;
     const menuItem = act === "press" && [this._ents.resetRefill, this._ents.identify].includes(el.dataset.entity);
     if (act !== "menu" && !menuItem) this._menu = false;
     // Save or Discard after trying to close finishes closing; anything
@@ -884,7 +897,7 @@ class GodrejAerCard extends HTMLElement {
         if (menuItem) {
           // The menu stays open, showing "Resetting…" or "Identifying…",
           // until the device acknowledges; then it closes.
-          if (this._busy) return;
+          if (this._any) return;
           const kind = id === this._ents.resetRefill ? "reset" : "identify";
           this._control(kind, "button", "press", { entity_id: id }).then(() => {
             this._menu = false;
@@ -898,7 +911,7 @@ class GodrejAerCard extends HTMLElement {
       case "auto":
         // Sent even while a schedule runs: the integration refuses it, and
         // Home Assistant's toast says why.
-        if (this._busy === "auto") return;
+        if (this._is("auto")) return;
         this._pendingAuto = el.dataset.option;
         if (this._ents.auto) this._control("auto", "select", "select_option", { entity_id: this._ents.auto, option: el.dataset.option });
         return;
@@ -910,7 +923,7 @@ class GodrejAerCard extends HTMLElement {
         break;
       case "edit-pop":
       case "add-pop": {
-        if (this._busy) return;
+        if (this._any) return;
         this._openDialog();
         if (act === "add-pop") this._add();
         else this._open = Number(el.dataset.index);
@@ -934,11 +947,11 @@ class GodrejAerCard extends HTMLElement {
         this._call("skip", "stop_schedule", { schedule: "current" });
         return;
       case "add":
-        if (this._busy) return;
+        if (this._any) return;
         this._add();
         break;
       case "edit":
-        if (this._busy) return;
+        if (this._any) return;
         this._open = Number(el.dataset.index);
         break;
       case "fold":

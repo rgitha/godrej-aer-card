@@ -8,7 +8,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.6-beta.1";
+const CARD_VERSION = "0.3.6-beta.2";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -148,6 +148,8 @@ function ago(iso) {
 
 // The integration's domain from 0.2.0, the earlier one and its test builds.
 const DOMAINS = ["aer_smartmatic", "godrej_aer", "godrej_aer_patched"];
+// The integration's name, as Home Assistant lists it.
+const INTEGRATION = "Godrej Aer Smart Matic";
 
 /** The integration's entities on a device, by role. */
 function deviceEntities(hass, deviceId) {
@@ -165,6 +167,7 @@ function deviceEntities(hass, deviceId) {
     return hit ? hit.entity_id : null;
   };
   return {
+    found: mine.length > 0,
     platform: mine.length ? mine[0].platform : "aer_smartmatic",
     status: find("sensor", "device_status", "_status"),
     battery: find("sensor", "battery_level", "_battery"),
@@ -355,9 +358,10 @@ class GodrejAerCard extends HTMLElement {
     setTimeFormat(hass.locale);
     const ents = deviceEntities(hass, this._deviceId);
     if (this._config.entity && !ents.schedules) ents.schedules = this._config.entity;
+    if (this._config.entity) ents.found = !!(hass.entities && hass.entities[this._config.entity]);
     // Redraw only when one of ours changed, so an open editor keeps its focus.
     const watched = Object.values(ents).filter((v) => typeof v === "string" && v.includes("."));
-    const snapshot = watched.map((id) => hass.states[id]);
+    const snapshot = [...watched.map((id) => hass.states[id]), hass.devices && hass.devices[this._deviceId], ents.found];
     const unchanged =
       this._snapshot &&
       snapshot.length === this._snapshot.length &&
@@ -383,8 +387,24 @@ class GodrejAerCard extends HTMLElement {
     return id ? this._hass.states[id] : null;
   }
 
-  /** The device isn't heard: its readings and controls are unavailable. */
+  /** Why the card has no device to show, as one line; null when it has one. */
+  get _problem() {
+    const devices = this._hass && this._hass.devices;
+    if (this._config.device && devices && !devices[this._config.device]) return "This device no longer exists.";
+    if (!this._ents || !this._ents.found) return `${INTEGRATION} isn't set up for this device.`;
+    const probe = this._layout === "schedules" ? this._sched : this._state("status") || this._state("battery") || this._sched;
+    if (!probe || probe.attributes.restored) return `${INTEGRATION} isn't running.`;
+    return null;
+  }
+
+  /** The one-line notice over a greyed-out card. */
+  get _notice() {
+    return this._problem || "The device can't be reached right now.";
+  }
+
+  /** The device isn't heard, or isn't there: its readings and controls are unavailable. */
   get _unreachable() {
+    if (this._problem) return true;
     const probe = this._state("battery") || this._sched;
     return !probe || probe.state === "unavailable";
   }
@@ -502,7 +522,7 @@ class GodrejAerCard extends HTMLElement {
     let html;
     if (!this._hass) {
       html = "";
-    } else if (!this._deviceId && !this._sched) {
+    } else if (!this._config.device && !this._config.entity) {
       html = `<div class="banner warn">Pick a Smart Matic device in the card's settings.</div>`;
     } else if (this._layout === "schedules") {
       html = this._renderSchedulesOnly();
@@ -560,11 +580,11 @@ class GodrejAerCard extends HTMLElement {
     return `
       <div class="top">
         <div class="names"><div class="area">${esc(sub)}</div><div class="title">${esc(this._deviceName())}</div></div>
-        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
+        <button class="icon" data-act="refresh" title="Read the device now" aria-label="Refresh" ${this._any || this._problem ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
         <button class="more" data-act="menu" aria-label="More" aria-haspopup="menu">${svg(ICON.dots)}</button>
         ${menu}
       </div>
-      ${off ? `<div class="banner">The device can't be reached right now.</div>` : ""}
+      ${off ? `<div class="banner">${esc(this._notice)}</div>` : ""}
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
       <div class="strip ${off ? "dim" : ""}">
         <span class="mode m-${esc(mode)}"><i></i>${esc(this._fmt(status) || "Unknown")}</span>
@@ -605,11 +625,10 @@ class GodrejAerCard extends HTMLElement {
           <div class="title">${esc(name)}</div>
           <div class="sub">${this._list && usable ? `${this._deviceList(state).length} of ${MAX_SCHEDULES} used · ` : ""}read ${esc(ago(state && state.attributes.last_read))}</div>
         </div>
-        <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? "…" : "⟳"}</button>
+        <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any || this._problem ? "disabled" : ""}>${this._is("refresh") ? "…" : "⟳"}</button>
       </div>
       ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}
-      ${!state ? `<div class="banner warn">Entity ${esc(this._config.entity)} not found.</div>`
-        : state.state === "unavailable" ? `<div class="banner">The device can't be reached right now.</div>`
+      ${this._problem || !state || state.state === "unavailable" ? `<div class="banner">${esc(this._notice)}</div>`
         : this._list === null || state.state === "unknown" ? `<div class="banner">The schedules haven't been read yet.</div>`
         : this._renderInline(state, false)}`;
   }
@@ -817,7 +836,7 @@ class GodrejAerCard extends HTMLElement {
     const unreachable = state.state === "unavailable";
     const sub = [this._areaName(), this._layout === "schedules" ? "" : this._deviceName()].filter(Boolean).join(" · ");
     const body = unreachable
-      ? `<div class="banner">The device can't be reached right now.</div>`
+      ? `<div class="banner">${esc(this._notice)}</div>`
       : this._list === null
         ? `<div class="banner">The schedules haven't been read yet.</div>`
         : this._renderDialogList(state);
@@ -828,7 +847,7 @@ class GodrejAerCard extends HTMLElement {
           <div class="dh">
             <button class="x" data-act="close-dialog" aria-label="Close">✕</button>
             <div class="dtl"><b>Schedules</b><span>${esc(sub)}</span></div>
-            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
+            <button class="icon" data-act="refresh" title="Read the schedules from the device" aria-label="Refresh" ${this._any || this._problem ? "disabled" : ""}>${this._is("refresh") ? `<span class="spin">${svg(ICON.refresh)}</span>` : svg(ICON.refresh)}</button>
           </div>
           ${this._list && !unreachable ? `<div class="used">${this._is("refresh") ? "Reading schedules…" : `${this._list.length} of ${MAX_SCHEDULES} used`}</div>` : ""}
           ${this._error ? `<div class="banner warn">${esc(this._error)}</div>` : ""}

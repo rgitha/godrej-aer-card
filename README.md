@@ -1,13 +1,15 @@
 # Card for Godrej Aer Smart Matic
 
 A Home Assistant dashboard card for a Godrej Aer Smart Matic, through the
-[godrej_aer](https://github.com/rgitha/godrej_aer) integration: its status,
+[Aer Smart Matic](https://github.com/rgitha/aer_smartmatic) integration: its status,
 Spray now, Auto spray, and the spray schedules stored on the device.
 
 ## Requirements
 
-- The [rgitha/godrej_aer](https://github.com/rgitha/godrej_aer) integration with
-  schedule support. It may also work with its upstream [ov1d1u/godrej_aer integration](https://github.com/ov1d1u/godrej_aer).
+- The [Aer Smart Matic](https://github.com/rgitha/aer_smartmatic) integration
+  (`aer_smartmatic`, 0.2.0 or later), or its earlier versions under
+  `godrej_aer`. It may also work with the upstream
+  [ov1d1u/godrej_aer integration](https://github.com/ov1d1u/godrej_aer).
 
 ## Installation
 

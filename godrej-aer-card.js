@@ -2,12 +2,13 @@
  * Card for Godrej Aer Smart Matic
  * A Home Assistant dashboard card for a Godrej Aer Smart Matic: its status,
  * Spray now, Auto spray and the spray schedules stored on the device,
- * through the godrej_aer integration.
+ * through the Aer Smart Matic integration (aer_smartmatic, or godrej_aer
+ * before 0.2.0).
  *
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.5";
+const CARD_VERSION = "0.3.6-beta.1";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -145,7 +146,8 @@ function ago(iso) {
 
 // --- the device's entities -----------------------------------------------------
 
-const DOMAINS = ["godrej_aer", "godrej_aer_patched"];
+// The integration's domain from 0.2.0, the earlier one and its test builds.
+const DOMAINS = ["aer_smartmatic", "godrej_aer", "godrej_aer_patched"];
 
 /** The integration's entities on a device, by role. */
 function deviceEntities(hass, deviceId) {
@@ -163,7 +165,7 @@ function deviceEntities(hass, deviceId) {
     return hit ? hit.entity_id : null;
   };
   return {
-    platform: mine.length ? mine[0].platform : "godrej_aer",
+    platform: mine.length ? mine[0].platform : "aer_smartmatic",
     status: find("sensor", "device_status", "_status"),
     battery: find("sensor", "battery_level", "_battery"),
     refill: find("sensor", "refill_level", "_refill_level"),
@@ -396,7 +398,7 @@ class GodrejAerCard extends HTMLElement {
   // --- device actions -------------------------------------------------------
 
   get _domain() {
-    return (this._ents && this._ents.platform) || "godrej_aer";
+    return (this._ents && this._ents.platform) || "aer_smartmatic";
   }
 
   get _target() {
@@ -1156,7 +1158,7 @@ const STYLE = `
   .acts span { display: flex; gap: 8px; }
 `;
 
-/** Schedules sensors: the godrej_aer sensors that carry a schedule list. */
+/** Schedules sensors: the integration's sensors that carry a schedule list. */
 const scheduleSensors = (hass) =>
   Object.keys(hass.states).filter(
     (id) => id.startsWith("sensor.") && Array.isArray(hass.states[id].attributes.schedules)
@@ -1181,7 +1183,7 @@ class GodrejAerScheduleCardEditor extends HTMLElement {
       this._form.computeLabel = (field) =>
         ({ entity: "Schedules sensor", title: "Title (optional)" })[field.name] || field.name;
       this._form.computeHelper = (field) =>
-        field.name === "entity" ? "The device's Schedules sensor, from the godrej_aer integration." : undefined;
+        field.name === "entity" ? "The device's Schedules sensor, from the Aer Smart Matic integration." : undefined;
       this._form.addEventListener("value-changed", (ev) => {
         const config = { ...ev.detail.value };
         if (!config.title) delete config.title;

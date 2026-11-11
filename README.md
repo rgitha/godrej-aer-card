@@ -1,14 +1,14 @@
 # Card for Godrej Aer Smart Matic
 
 A Home Assistant dashboard card for a Godrej Aer Smart Matic: its status,
-Spray now, Auto spray, and the spray schedules stored on the device. It's for
-users of the upstream [godrej_aer](https://github.com/ov1d1u/godrej_aer)
+Spray now, Auto spray, and the spray schedules stored on the device. This is for
+users of the [godrej_aer](https://github.com/ov1d1u/godrej_aer)
 integration.
 
-> **Using [Godrej Aer Smart Matic](https://github.com/rgitha/aer_smartmatic)
-> (`aer_smartmatic`)?** Don't install this card. The integration comes with its
-> own card from 0.3.0. If both are installed, this one shows a note saying so.
-
+> **If you are using the [Godrej Aer Smart Matic](https://github.com/rgitha/aer_smartmatic)
+> (`aer_smartmatic`) integration** Don't install this card. That integration comes with its
+> own card. If both are installed, this card shows a note about it.
+<br>
 <p>
   <img src="docs/images/card.png" alt="The card with its schedules" width="49%">
   <img src="docs/images/card-compact.png" alt="The card showing the next schedule" width="49%">
@@ -16,7 +16,7 @@ integration.
 
 ## Requirements
 
-- The upstream [godrej_aer](https://github.com/ov1d1u/godrej_aer) integration,
+- The [godrej_aer](https://github.com/ov1d1u/godrej_aer) integration,
   0.0.8 or later.
 
 ## Installation

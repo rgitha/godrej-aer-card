@@ -8,7 +8,7 @@
  * Copyright 2026 Rgitha. Licensed under the Apache License, Version 2.0.
  */
 
-const CARD_VERSION = "0.3.7";
+const CARD_VERSION = "0.3.8";
 const MAX_SCHEDULES = 10;
 // The device stores at most 144 sprays per schedule; a window is at most 24 h.
 const MAX_SPRAYS = 144;
@@ -150,6 +150,8 @@ function ago(iso) {
 const DOMAINS = ["aer_smartmatic", "godrej_aer", "godrej_aer_patched"];
 // The integration's name, as Home Assistant lists it.
 const INTEGRATION = "Godrej Aer Smart Matic";
+// The card that comes with the integration from 0.3.0; with it, this one isn't needed.
+const BUNDLED_CARD = "aer-smartmatic-card";
 
 /** The integration's entities on a device, by role. */
 function deviceEntities(hass, deviceId) {
@@ -528,6 +530,9 @@ class GodrejAerCard extends HTMLElement {
       html = this._renderSchedulesOnly();
     } else {
       html = this._renderDevice();
+    }
+    if (this._hass && customElements.get(BUNDLED_CARD)) {
+      html = `<div class="banner warn">This card isn't needed: ${INTEGRATION} comes with its own. Use that one instead, and remove this one.</div>` + html;
     }
     this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card>${html}</ha-card>`;
     this._bind(this.shadowRoot);
@@ -1281,7 +1286,7 @@ customElements.define("godrej-aer-schedule-card-editor", GodrejAerScheduleCardEd
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "godrej-aer-card",
-  name: "Card for Godrej Aer Smart Matic",
+  name: "Card for Godrej Aer Smart Matic (godrej_aer)",
   description: "Status, Spray now, Auto spray and the schedules of a Godrej Aer Smart Matic.",
   preview: true, // the card picker shows it live, with the first device
   documentationURL: "https://github.com/rgitha/godrej-aer-card",
@@ -1289,7 +1294,7 @@ window.customCards.push({
   getEntitySuggestion: (hass, entityId) => {
     const entry = hass.entities && hass.entities[entityId];
     return entry && DOMAINS.includes(entry.platform) && entry.device_id
-      ? { label: "Card for Godrej Aer Smart Matic", config: { type: "custom:godrej-aer-card", device: entry.device_id } }
+      ? { label: "Card for Godrej Aer Smart Matic (godrej_aer)", config: { type: "custom:godrej-aer-card", device: entry.device_id } }
       : null;
   },
 });
